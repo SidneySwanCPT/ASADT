@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react"
-import { suggestTasks } from "../lib/ai"
+import { callClaude } from "../lib/claude"
 import { Sparkles, X, Check, RefreshCw, Plus } from "lucide-react"
 
 export default function AITaskSuggestions({ trip, client, onAddTasks, onClose }) {

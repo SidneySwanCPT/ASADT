@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react"
-import { generateClientBriefing } from "../lib/ai"
+import { callClaude } from "../lib/claude"
 import { Sparkles, X, Copy, Check, RefreshCw, FileText } from "lucide-react"
 
 export default function AIClientBriefing({ client, trips, tasks, travelers, loyalty, onClose }) {

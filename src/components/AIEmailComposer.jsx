@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { draftEmail } from "../lib/ai"
+import { callClaude } from "../lib/claude"
 import { Sparkles, Copy, Check, RefreshCw, X, Mail } from "lucide-react"
 
 const EMAIL_TYPES = [
