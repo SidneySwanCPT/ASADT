@@ -4,7 +4,6 @@ import { supabase } from "../lib/supabase"
 import { format, differenceInDays } from "date-fns"
 import { Globe, Plus, Search, Calendar, List, ChevronLeft, ChevronRight, X, Edit2, Trash2, Users, CheckSquare, Upload, FileText, Eye, EyeOff, Sparkles } from "lucide-react"
 import { Card, PageHeader, Button, Input, Select, Textarea, Modal, EmptyState, Spinner, StatusBadge, OccasionBadge, Badge, StatsBar, InfoRow } from "../components/UI"
-import AITaskSuggestions from "../components/AITaskSuggestions"
 import AIEmailComposer from "../components/AIEmailComposer"
 import { startOfMonth, endOfMonth, eachDayOfInterval, isToday, parseISO, addMonths, subMonths } from "date-fns"
 
