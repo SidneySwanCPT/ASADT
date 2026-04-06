@@ -35,6 +35,7 @@ export default function TripsPage() {
   const [aiTaskModal, setAiTaskModal] = useState(false)
   const [aiTaskTrip, setAiTaskTrip]   = useState(null)
   const [emailModal, setEmailModal]   = useState(false)
+  const [clientSearch, setClientSearch] = useState("")
   const fileRef = useRef(null)
 
   const load = async () => {
@@ -67,8 +68,8 @@ export default function TripsPage() {
     await loadDetail(trip)
   }
 
-  const openNew  = () => { setEditing(null); setForm(EMPTY_TRIP); setModal(true) }
-  const openEdit = (t) => { setEditing(t); setForm({ ...EMPTY_TRIP, ...t }); setDetailTrip(null); setModal(true) }
+  const openNew  = () => { setEditing(null); setForm(EMPTY_TRIP); setClientSearch(""); setModal(true) }
+  const openEdit = (t) => { setEditing(t); setForm({ ...EMPTY_TRIP, ...t }); setClientSearch(clients.find(c=>c.id===t.client_id) ? `${clients.find(c=>c.id===t.client_id)?.first_name} ${clients.find(c=>c.id===t.client_id)?.last_name}` : ""); setDetailTrip(null); setModal(true) }
 
   const save = async () => {
     setSaving(true)
@@ -623,10 +624,57 @@ export default function TripsPage() {
           <Button variant="secondary" onClick={() => setModal(false)}>Cancel</Button>
           <Button onClick={save} disabled={saving}>{saving ? "Saving..." : "Save trip"}</Button>
         </>}>
-        <Select label="Lead client" {...field("client_id")}>
-          <option value="">Select a client...</option>
-          {clients.map(c => <option key={c.id} value={c.id}>{c.first_name} {c.last_name}</option>)}
-        </Select>
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1 uppercase tracking-wide">Lead client</label>
+          <div className="relative">
+            <input
+              placeholder="Type to search clients..."
+              value={clientSearch}
+              onChange={e => {
+                setClientSearch(e.target.value)
+                // Clear client_id if they start typing again
+                if (form.client_id) setForm(f => ({ ...f, client_id: "" }))
+              }}
+              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-300 bg-white hover:border-brand-200 transition-colors"
+            />
+            {clientSearch.length > 0 && !form.client_id && (
+              <div className="absolute top-full left-0 right-0 bg-white border border-slate-200 rounded-lg shadow-lg z-50 max-h-48 overflow-y-auto mt-0.5">
+                {clients
+                  .filter(c => `${c.first_name} ${c.last_name}`.toLowerCase().includes(clientSearch.toLowerCase()))
+                  .slice(0, 10)
+                  .map(c => (
+                    <div key={c.id}
+                      onClick={() => {
+                        setForm(f => ({ ...f, client_id: c.id }))
+                        setClientSearch(`${c.first_name} ${c.last_name}`)
+                      }}
+                      className="px-3 py-2.5 hover:bg-brand-50 cursor-pointer flex items-center gap-2.5 border-b border-slate-50 last:border-0">
+                      <div className="w-6 h-6 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0" style={{background:"#8B1A4A"}}>
+                        {c.first_name?.[0]}{c.last_name?.[0]}
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-slate-800">{c.first_name} {c.last_name}</p>
+                        {c.email && <p className="text-xs text-slate-400">{c.email}</p>}
+                      </div>
+                    </div>
+                  ))
+                }
+                {clients.filter(c => `${c.first_name} ${c.last_name}`.toLowerCase().includes(clientSearch.toLowerCase())).length === 0 && (
+                  <p className="px-3 py-2 text-sm text-slate-400">No clients found</p>
+                )}
+              </div>
+            )}
+          </div>
+          {form.client_id && (
+            <div className="flex items-center justify-between mt-1.5 px-2 py-1 bg-brand-50 rounded-lg">
+              <p className="text-xs text-brand-700 font-medium">
+                ✓ {clients.find(c => c.id === form.client_id)?.first_name} {clients.find(c => c.id === form.client_id)?.last_name}
+              </p>
+              <button onClick={() => { setForm(f => ({ ...f, client_id: "" })); setClientSearch("") }}
+                className="text-xs text-brand-400 hover:text-brand-600">Clear</button>
+            </div>
+          )}
+        </div>
         <div className="grid grid-cols-2 gap-3">
           <Input label="Destination" {...field("destination")} placeholder="Montego Bay, Jamaica" />
           <Select label="Occasion" {...field("occasion")}>{OCCASIONS.map(o=><option key={o}>{o}</option>)}</Select>

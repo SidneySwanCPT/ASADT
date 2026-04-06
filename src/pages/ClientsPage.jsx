@@ -77,10 +77,23 @@ export default function ClientsPage() {
 
   const save = async () => {
     setSaving(true)
-    if (editing) {
-      await supabase.from("clients").update(form).eq("id", editing.id)
-    } else {
-      await supabase.from("clients").insert(form)
+    // Clean empty strings to null for optional fields
+    const payload = Object.fromEntries(
+      Object.entries(form).map(([k, v]) => [k, v === "" ? null : v])
+    )
+    // Keep required fields
+    payload.first_name = form.first_name
+    payload.last_name  = form.last_name
+    payload.is_minor   = form.is_minor || false
+
+    const { error } = editing
+      ? await supabase.from("clients").update(payload).eq("id", editing.id)
+      : await supabase.from("clients").insert(payload)
+
+    if (error) {
+      alert("Error saving client: " + error.message)
+      setSaving(false)
+      return
     }
     setSaving(false); setModal(false); load()
   }
@@ -92,7 +105,7 @@ export default function ClientsPage() {
     load()
   }
 
-  const field = (k) => ({ value: form[k]??false===form[k]?form[k]:form[k]||"", onChange: e => setForm(f => ({ ...f, [k]: e.target.value })) })
+  const field = (k) => ({ value: form[k] === undefined || form[k] === null ? "" : form[k], onChange: e => setForm(f => ({ ...f, [k]: e.target.value })) })
 
   const clientTripsMap = {}
   trips.forEach(t => {
