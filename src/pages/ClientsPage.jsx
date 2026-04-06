@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react"
 import { supabase } from "../lib/supabase"
 import { useNavigate } from "react-router-dom"
-import { Users, Search, Plus, Phone, Mail, AlertTriangle, Filter, Globe, ChevronDown, ChevronRight, List, GitBranch } from "lucide-react"
+import { Users, Search, Plus, Phone, Mail, AlertTriangle, Filter, Globe, ChevronDown, ChevronRight, List, GitBranch, ArrowRight } from "lucide-react"
 import { differenceInDays } from "date-fns"
-import { Card, PageHeader, Button, Input, Select, Textarea, Modal, EmptyState, Spinner, StatsBar, MissingDot } from "../components/UI"
+import { Card, PageHeader, Button, Input, Select, Textarea, Modal, EmptyState, Spinner, MissingDot } from "../components/UI"
 
 const EMPTY = {
   first_name:"", last_name:"", email:"", phone:"", date_of_birth:"",
@@ -112,6 +112,11 @@ export default function ClientsPage() {
     else if (depFilter === "past")   matchDep = cTrips.some(t => t.departure_date && new Date(t.departure_date) < new Date())
     else if (depFilter === "future") matchDep = cTrips.some(t => t.departure_date && new Date(t.departure_date) >= new Date())
     return ms && matchDest && matchDep
+  }).sort((a, b) => {
+    const la = (a.last_name || "").toLowerCase()
+    const lb = (b.last_name || "").toLowerCase()
+    if (la !== lb) return la.localeCompare(lb)
+    return (a.first_name || "").toLowerCase().localeCompare((b.first_name || "").toLowerCase())
   })
 
   // Build group tree
@@ -152,12 +157,23 @@ export default function ClientsPage() {
         action={<Button onClick={openNew} size="lg"><Plus size={16}/>Add client</Button>}
       />
 
-      <StatsBar stats={[
-        { label:"Total clients",       value: clients.length,  color:"pink"  },
-        { label:"With active trips",   value: withTrips,       color:"green" },
-        { label:"Active bookings",     value: activeTrips,     color:"blue"  },
-        { label:"Incomplete profiles", value: totalMissing,    color:"amber" },
-      ]} />
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+        {[
+          { label:"Total clients",       value: clients.length, color:"bg-brand-50 text-brand-600 border-brand-100", action: () => { setSearch(""); setDest(""); setDep("") } },
+          { label:"With active trips",   value: withTrips,      color:"bg-green-50 text-green-600 border-green-100",  action: () => { setDep("future"); setSearch("") } },
+          { label:"Active bookings",     value: activeTrips,    color:"bg-blue-50 text-blue-600 border-blue-100",     action: () => navigate("/trips") },
+          { label:"Incomplete profiles", value: totalMissing,   color:"bg-amber-50 text-amber-600 border-amber-100",  action: () => { setSearch(""); setDep(""); setDest(""); setFilters(true) } },
+        ].map(({ label, value, color, action }) => (
+          <div key={label} onClick={action}
+            className={`rounded-xl border p-4 flex items-start gap-3 cursor-pointer hover:shadow-md transition-all group ${color}`}>
+            <div className="flex-1">
+              <p className="text-2xl font-bold leading-tight">{value}</p>
+              <p className="text-xs opacity-80 mt-0.5">{label}</p>
+            </div>
+            <ArrowRight size={13} className="opacity-30 group-hover:opacity-80 transition-opacity mt-1 flex-shrink-0" />
+          </div>
+        ))}
+      </div>
 
       {/* Search + filters + view toggle */}
       <div className="space-y-2 mb-5">
