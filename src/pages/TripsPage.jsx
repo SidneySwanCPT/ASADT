@@ -36,6 +36,10 @@ export default function TripsPage() {
   const [aiTaskTrip, setAiTaskTrip]   = useState(null)
   const [emailModal, setEmailModal]   = useState(false)
   const [clientSearch, setClientSearch] = useState("")
+  const [tripTravelers, setTripTravelers] = useState([])
+  const [travelerSearch, setTravelerSearch] = useState("")
+  const [showNewTravelerInline, setShowNewTravelerInline] = useState(false)
+  const [inlineTravelerForm, setInlineTravelerForm] = useState({ first_name:"", last_name:"", email:"", phone:"", date_of_birth:"", passport_number:"" })
   const fileRef = useRef(null)
 
   const load = async () => {
@@ -68,27 +72,62 @@ export default function TripsPage() {
     await loadDetail(trip)
   }
 
-  const openNew  = () => { setEditing(null); setForm(EMPTY_TRIP); setClientSearch(""); setModal(true) }
+  const openNew  = () => {
+    setEditing(null); setForm(EMPTY_TRIP); setClientSearch("")
+    setTripTravelers([]); setTravelerSearch(""); setShowNewTravelerInline(false)
+    setInlineTravelerForm({ first_name:"", last_name:"", email:"", phone:"", date_of_birth:"", passport_number:"" })
+    setModal(true)
+  }
   const openEdit = (t) => { setEditing(t); setForm({ ...EMPTY_TRIP, ...t }); setClientSearch(clients.find(c=>c.id===t.client_id) ? `${clients.find(c=>c.id===t.client_id)?.first_name} ${clients.find(c=>c.id===t.client_id)?.last_name}` : ""); setDetailTrip(null); setModal(true) }
 
   const save = async () => {
     setSaving(true)
-    const payload = { ...form, total_price: parseFloat(form.total_price)||0, amount_paid: parseFloat(form.amount_paid)||0, credit_balance: parseFloat(form.credit_balance)||0, occasion: form.occasion||null }
+    // Find lead from travelers list (or use form.client_id)
+    const leadTraveler = tripTravelers.find(t => t.isLead)
+    const leadClientId = leadTraveler?.clientId || form.client_id || null
+
+    const payload = {
+      ...form,
+      client_id:      leadClientId,
+      total_price:    parseFloat(form.total_price)||0,
+      amount_paid:    parseFloat(form.amount_paid)||0,
+      credit_balance: parseFloat(form.credit_balance)||0,
+      occasion:       form.occasion||null,
+      traveler_count: tripTravelers.length > 0 ? tripTravelers.length : parseInt(form.traveler_count)||1,
+    }
+
     if (editing) {
       await supabase.from("trips").update(payload).eq("id", editing.id)
+      setSaving(false); setModal(false); load()
     } else {
       const { data: newTrip } = await supabase.from("trips").insert(payload).select().single()
-      if (form.group_name && newTrip) {
-        const { data: grp } = await supabase.from("groups").insert({ name: form.group_name, trip_id: newTrip.id, lead_client_id: form.client_id||null, status: "Active" }).select().single()
-        if (grp) await supabase.from("trips").update({ group_id: grp.id }).eq("id", newTrip.id)
+      if (!newTrip) { setSaving(false); return }
+
+      // Create group if multiple travelers or group name provided
+      if (tripTravelers.length > 1 || form.group_name) {
+        const groupName = form.group_name || newTrip.destination
+        const { data: grp } = await supabase.from("groups").insert({
+          name: groupName, trip_id: newTrip.id, lead_client_id: leadClientId, status: "Active"
+        }).select().single()
+        if (grp) {
+          await supabase.from("trips").update({ group_id: grp.id }).eq("id", newTrip.id)
+          await Promise.all(tripTravelers.map(t =>
+            supabase.from("group_members").insert({
+              group_id: grp.id,
+              client_id: t.clientId || null,
+              role: t.isLead ? "Lead" : "Member",
+              payment_status: "Pending",
+              amount_owed: 0,
+            })
+          ))
+        }
       }
-      if (newTrip) {
-        setSaving(false); setModal(false); load()
-        setAiTaskTrip(newTrip); setAiTaskModal(true)
-        return
-      }
+
+      setSaving(false); setModal(false)
+      setTripTravelers([]); setTravelerSearch(""); setShowNewTravelerInline(false)
+      load()
+      setAiTaskTrip(newTrip); setAiTaskModal(true)
     }
-    setSaving(false); setModal(false); load()
   }
 
   const deleteTrip = async (id) => {
@@ -619,88 +658,255 @@ export default function TripsPage() {
       </Modal>
 
       {/* Add/Edit trip modal */}
-      <Modal open={modal} onClose={() => setModal(false)} title={editing ? "Edit trip" : "New trip"} wide
+      <Modal open={modal} onClose={() => setModal(false)}
+        title={editing ? "Edit trip" : "New trip"} extraWide
         footer={<>
           <Button variant="secondary" onClick={() => setModal(false)}>Cancel</Button>
-          <Button onClick={save} disabled={saving}>{saving ? "Saving..." : "Save trip"}</Button>
+          <Button onClick={save} disabled={saving}>
+            {saving ? "Saving..." : `Save trip${!editing && tripTravelers.length > 0 ? ` (${tripTravelers.length + (form.client_id ? 1 : 0)} travelers)` : ""}`}
+          </Button>
         </>}>
-        <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1 uppercase tracking-wide">Lead client</label>
-          <div className="relative">
-            <input
-              placeholder="Type to search clients..."
-              value={clientSearch}
-              onChange={e => {
-                setClientSearch(e.target.value)
-                // Clear client_id if they start typing again
-                if (form.client_id) setForm(f => ({ ...f, client_id: "" }))
-              }}
-              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-300 bg-white hover:border-brand-200 transition-colors"
-            />
-            {clientSearch.length > 0 && !form.client_id && (
-              <div className="absolute top-full left-0 right-0 bg-white border border-slate-200 rounded-lg shadow-lg z-50 max-h-48 overflow-y-auto mt-0.5">
-                {clients
-                  .filter(c => `${c.first_name} ${c.last_name}`.toLowerCase().includes(clientSearch.toLowerCase()))
-                  .slice(0, 10)
-                  .map(c => (
-                    <div key={c.id}
-                      onClick={() => {
-                        setForm(f => ({ ...f, client_id: c.id }))
-                        setClientSearch(`${c.first_name} ${c.last_name}`)
-                      }}
-                      className="px-3 py-2.5 hover:bg-brand-50 cursor-pointer flex items-center gap-2.5 border-b border-slate-50 last:border-0">
-                      <div className="w-6 h-6 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0" style={{background:"#8B1A4A"}}>
-                        {c.first_name?.[0]}{c.last_name?.[0]}
+
+        <div className="grid grid-cols-2 gap-5">
+          {/* Left col — trip details */}
+          <div className="space-y-3">
+            <p className="text-xs font-semibold text-brand-600 uppercase tracking-wider">Trip details</p>
+
+            {/* Searchable lead client */}
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1 uppercase tracking-wide">Lead client</label>
+              <div className="relative">
+                <input placeholder="Type to search clients..."
+                  value={clientSearch}
+                  onChange={e => { setClientSearch(e.target.value); if (form.client_id) setForm(f => ({ ...f, client_id: "" })) }}
+                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-300 bg-white"/>
+                {clientSearch.length > 0 && !form.client_id && (
+                  <div className="absolute top-full left-0 right-0 bg-white border border-slate-200 rounded-lg shadow-lg z-50 max-h-44 overflow-y-auto mt-0.5">
+                    {clients.filter(c => `${c.first_name} ${c.last_name} ${c.email||""}`.toLowerCase().includes(clientSearch.toLowerCase())).slice(0,8).map(c => (
+                      <div key={c.id} onClick={() => { setForm(f => ({ ...f, client_id: c.id })); setClientSearch(`${c.first_name} ${c.last_name}`) }}
+                        className="px-3 py-2 hover:bg-brand-50 cursor-pointer flex items-center gap-2 border-b border-slate-50 last:border-0">
+                        <div className="w-6 h-6 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0" style={{background:"#8B1A4A"}}>{c.first_name?.[0]}{c.last_name?.[0]}</div>
+                        <div><p className="text-sm font-medium text-slate-800">{c.first_name} {c.last_name}</p>{c.email && <p className="text-xs text-slate-400">{c.email}</p>}</div>
                       </div>
-                      <div>
-                        <p className="text-sm font-medium text-slate-800">{c.first_name} {c.last_name}</p>
-                        {c.email && <p className="text-xs text-slate-400">{c.email}</p>}
-                      </div>
-                    </div>
-                  ))
-                }
-                {clients.filter(c => `${c.first_name} ${c.last_name}`.toLowerCase().includes(clientSearch.toLowerCase())).length === 0 && (
-                  <p className="px-3 py-2 text-sm text-slate-400">No clients found</p>
+                    ))}
+                    {clients.filter(c => `${c.first_name} ${c.last_name}`.toLowerCase().includes(clientSearch.toLowerCase())).length === 0 && (
+                      <p className="px-3 py-2 text-sm text-slate-400">No clients found</p>
+                    )}
+                  </div>
                 )}
+              </div>
+              {form.client_id && (
+                <div className="flex items-center justify-between mt-1 px-2 py-1 bg-brand-50 rounded-lg">
+                  <p className="text-xs text-brand-700 font-medium">✓ {clients.find(c=>c.id===form.client_id)?.first_name} {clients.find(c=>c.id===form.client_id)?.last_name}</p>
+                  <button onClick={() => { setForm(f=>({...f,client_id:""})); setClientSearch("") }} className="text-xs text-brand-400 hover:text-brand-600">Clear</button>
+                </div>
+              )}
+            </div>
+
+            <Input label="Destination" {...field("destination")} placeholder="Montego Bay, Jamaica" />
+            <div className="grid grid-cols-2 gap-3">
+              <Select label="Occasion" {...field("occasion")}>{OCCASIONS.map(o=><option key={o}>{o}</option>)}</Select>
+              <Input label="Group name" {...field("group_name")} placeholder="Girls Trip, Church Group..." />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Input label="Departure date" type="date" {...field("departure_date")} />
+              <Input label="Return date"    type="date" {...field("return_date")} />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Input label="Total price ($)" type="number" {...field("total_price")} placeholder="0.00" />
+              <Input label="Amount paid ($)" type="number" {...field("amount_paid")} placeholder="0.00" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Select label="Status" {...field("status")}>{STATUSES.map(s=><option key={s}>{s}</option>)}</Select>
+              <Input label="Confirmation #" {...field("confirmation_number")} placeholder="ABC123" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Input label="Booking ref" {...field("booking_ref")} placeholder="REF456" />
+              <Input label="Credit balance ($)" type="number" {...field("credit_balance")} placeholder="0.00" />
+            </div>
+            <Textarea label="Notes" {...field("notes")} />
+          </div>
+
+          {/* Right col — traveler picker */}
+          <div className="space-y-3">
+            <p className="text-xs font-semibold text-brand-600 uppercase tracking-wider">
+              Travelers{editing ? " (edit after saving)" : ""}
+            </p>
+
+            {!editing && (
+              <>
+                {/* Selected travelers box */}
+                <div className="border-2 border-dashed border-slate-200 rounded-xl overflow-hidden min-h-24 bg-slate-50">
+                  <div className="px-3 py-2 bg-slate-100 border-b border-slate-200">
+                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
+                      List of travelers ({tripTravelers.length + (form.client_id ? 1 : 0)})
+                    </p>
+                  </div>
+
+                  {/* Lead client pill */}
+                  {form.client_id && (
+                    <div className="flex items-center gap-2.5 px-3 py-2.5 border-b border-slate-100">
+                      <div className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0" style={{background:"#8B1A4A"}}>
+                        {clients.find(c=>c.id===form.client_id)?.first_name?.[0]}{clients.find(c=>c.id===form.client_id)?.last_name?.[0]}
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-sm font-medium text-slate-800">{clients.find(c=>c.id===form.client_id)?.first_name} {clients.find(c=>c.id===form.client_id)?.last_name}</p>
+                        <p className="text-xs text-slate-400">{clients.find(c=>c.id===form.client_id)?.email}</p>
+                      </div>
+                      <span className="text-xs bg-brand-500 text-white px-2 py-0.5 rounded-full font-medium">Lead</span>
+                    </div>
+                  )}
+
+                  {/* Added travelers */}
+                  {tripTravelers.length === 0 && !form.client_id && (
+                    <p className="text-xs text-slate-400 px-3 py-4 text-center">Search and add travelers below</p>
+                  )}
+                  {tripTravelers.map((t, i) => (
+                    <div key={i} className="flex items-center gap-2.5 px-3 py-2.5 border-b border-slate-50 last:border-0 hover:bg-white transition-colors">
+                      <div className="w-7 h-7 rounded-full bg-brand-100 flex items-center justify-center text-brand-700 text-xs font-bold flex-shrink-0">
+                        {t.name?.[0]}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-slate-800 truncate">{t.name}</p>
+                        {t.email && <p className="text-xs text-slate-400 truncate">{t.email}</p>}
+                        {t.isNew && <p className="text-xs text-green-600 font-medium">✓ New client created</p>}
+                      </div>
+                      <button
+                        onClick={() => setTripTravelers(tv => tv.map((x,j) => ({...x, isLead: j===i ? !x.isLead : false})))}
+                        className={`text-xs px-2 py-0.5 rounded-full font-medium transition-colors flex-shrink-0 ${t.isLead ? "bg-brand-500 text-white" : "bg-slate-100 text-slate-500 hover:bg-brand-100 hover:text-brand-600"}`}>
+                        {t.isLead ? "Lead ✓" : "Lead?"}
+                      </button>
+                      <button onClick={() => setTripTravelers(tv => tv.filter((_,j) => j!==i))}
+                        className="text-slate-300 hover:text-red-400 transition-colors ml-1 flex-shrink-0">
+                        <X size={13}/>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Search box — always visible, always ready */}
+                {!showNewTravelerInline && (
+                  <div className="relative">
+                    <label className="block text-xs font-medium text-slate-600 mb-1 uppercase tracking-wide">Search & add travelers</label>
+                    <input
+                      value={travelerSearch}
+                      onChange={e => setTravelerSearch(e.target.value)}
+                      placeholder="Type name, email, or phone..."
+                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-300 bg-white"
+                    />
+                    {travelerSearch.length > 0 && (
+                      <div className="absolute top-full left-0 right-0 bg-white border border-slate-200 rounded-lg shadow-xl z-50 max-h-48 overflow-y-auto mt-0.5">
+                        {clients
+                          .filter(c =>
+                            c.id !== form.client_id &&
+                            !tripTravelers.some(t => t.clientId === c.id) &&
+                            `${c.first_name} ${c.last_name} ${c.email||""} ${c.phone||""}`.toLowerCase().includes(travelerSearch.toLowerCase())
+                          )
+                          .slice(0, 8)
+                          .map(c => (
+                            <div key={c.id}
+                              onClick={() => {
+                                setTripTravelers(tv => [...tv, { clientId: c.id, name: `${c.first_name} ${c.last_name}`, email: c.email, isLead: false }])
+                                setTravelerSearch("")
+                              }}
+                              className="flex items-center gap-2.5 px-3 py-2.5 hover:bg-brand-50 cursor-pointer border-b border-slate-50 last:border-0">
+                              <div className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0" style={{background:"#8B1A4A"}}>
+                                {c.first_name?.[0]}{c.last_name?.[0]}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium text-slate-800">{c.first_name} {c.last_name}</p>
+                                {c.email && <p className="text-xs text-slate-400 truncate">{c.email}</p>}
+                              </div>
+                              <span className="text-xs text-brand-500 font-medium flex-shrink-0">+ Add</span>
+                            </div>
+                          ))
+                        }
+                        {clients.filter(c => c.id !== form.client_id && !tripTravelers.some(t=>t.clientId===c.id) && `${c.first_name} ${c.last_name} ${c.email||""} ${c.phone||""}`.toLowerCase().includes(travelerSearch.toLowerCase())).length === 0 && (
+                          <div className="px-3 py-3 text-center">
+                            <p className="text-sm text-slate-400 mb-2">No existing clients match "{travelerSearch}"</p>
+                            <button onClick={() => { setShowNewTravelerInline(true); setInlineTravelerForm(f=>({...f, first_name: travelerSearch.split(" ")[0]||"", last_name: travelerSearch.split(" ").slice(1).join(" ")||"" })); setTravelerSearch("") }}
+                              className="text-xs text-brand-600 font-medium hover:text-brand-800">
+                              + Create new client for "{travelerSearch}"
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* New traveler inline form */}
+                {showNewTravelerInline ? (
+                  <div className="border border-brand-200 rounded-xl p-3 bg-brand-50 space-y-2">
+                    <p className="text-xs font-semibold text-brand-600">New traveler — creates a full client record</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <input value={inlineTravelerForm.first_name} onChange={e=>setInlineTravelerForm(f=>({...f,first_name:e.target.value}))}
+                        placeholder="First name *" className="border border-slate-200 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-300 bg-white"/>
+                      <input value={inlineTravelerForm.last_name} onChange={e=>setInlineTravelerForm(f=>({...f,last_name:e.target.value}))}
+                        placeholder="Last name *" className="border border-slate-200 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-300 bg-white"/>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <input value={inlineTravelerForm.email} onChange={e=>setInlineTravelerForm(f=>({...f,email:e.target.value}))}
+                        placeholder="Email" type="email" className="border border-slate-200 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-300 bg-white"/>
+                      <input value={inlineTravelerForm.phone} onChange={e=>setInlineTravelerForm(f=>({...f,phone:e.target.value}))}
+                        placeholder="Phone" className="border border-slate-200 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-300 bg-white"/>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <input value={inlineTravelerForm.date_of_birth} onChange={e=>setInlineTravelerForm(f=>({...f,date_of_birth:e.target.value}))}
+                        type="date" className="border border-slate-200 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-300 bg-white"/>
+                      <input value={inlineTravelerForm.passport_number} onChange={e=>setInlineTravelerForm(f=>({...f,passport_number:e.target.value}))}
+                        placeholder="Passport # (optional)" className="border border-slate-200 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-300 bg-white"/>
+                    </div>
+                    <div className="flex gap-2 pt-1">
+                      <Button size="sm"
+                        disabled={!inlineTravelerForm.first_name || !inlineTravelerForm.last_name}
+                        onClick={async () => {
+                          const { data: nc } = await supabase.from("clients").insert({
+                            first_name: inlineTravelerForm.first_name,
+                            last_name:  inlineTravelerForm.last_name,
+                            email:      inlineTravelerForm.email || null,
+                            phone:      inlineTravelerForm.phone || null,
+                            date_of_birth: inlineTravelerForm.date_of_birth || null,
+                            passport_number: inlineTravelerForm.passport_number || null,
+                          }).select().single()
+                          if (nc) {
+                            setTripTravelers(tv => [...tv, { clientId: nc.id, name: `${nc.first_name} ${nc.last_name}`, email: nc.email, isLead: false, isNew: true }])
+                            const { data: ac } = await supabase.from("clients").select("id,first_name,last_name,email,phone").order("last_name")
+                            setClients(ac || [])
+                          }
+                          setInlineTravelerForm({ first_name:"", last_name:"", email:"", phone:"", date_of_birth:"", passport_number:"" })
+                          setShowNewTravelerInline(false)
+                        }}>
+                        <Plus size={12}/>Add to trip
+                      </Button>
+                      <Button variant="secondary" size="sm" onClick={() => { setShowNewTravelerInline(false); setInlineTravelerForm({ first_name:"", last_name:"", email:"", phone:"", date_of_birth:"", passport_number:"" }) }}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => { setShowNewTravelerInline(true); setTravelerSearch("") }}
+                    className="w-full py-2 border-2 border-dashed border-brand-200 rounded-lg text-xs text-brand-500 font-medium hover:border-brand-400 hover:text-brand-700 hover:bg-brand-50 transition-all flex items-center justify-center gap-1.5">
+                    <Plus size={13}/>Add new traveler (not in system)
+                  </button>
+                )}
+
+                {tripTravelers.length > 0 && (
+                  <p className="text-xs text-slate-400 text-center">
+                    Click "Lead?" next to any traveler to make them the lead client on this booking
+                  </p>
+                )}
+              </>
+            )}
+
+            {editing && (
+              <div className="bg-slate-50 rounded-xl p-4 text-center">
+                <p className="text-sm text-slate-500">To manage travelers on an existing trip, use the trip detail panel and click "Add" in the Group travelers section.</p>
               </div>
             )}
           </div>
-          {form.client_id && (
-            <div className="flex items-center justify-between mt-1.5 px-2 py-1 bg-brand-50 rounded-lg">
-              <p className="text-xs text-brand-700 font-medium">
-                ✓ {clients.find(c => c.id === form.client_id)?.first_name} {clients.find(c => c.id === form.client_id)?.last_name}
-              </p>
-              <button onClick={() => { setForm(f => ({ ...f, client_id: "" })); setClientSearch("") }}
-                className="text-xs text-brand-400 hover:text-brand-600">Clear</button>
-            </div>
-          )}
         </div>
-        <div className="grid grid-cols-2 gap-3">
-          <Input label="Destination" {...field("destination")} placeholder="Montego Bay, Jamaica" />
-          <Select label="Occasion" {...field("occasion")}>{OCCASIONS.map(o=><option key={o}>{o}</option>)}</Select>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <Input label="Departure date" type="date" {...field("departure_date")} />
-          <Input label="Return date"    type="date" {...field("return_date")} />
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <Input label="Total price ($)"  type="number" {...field("total_price")} placeholder="0.00" />
-          <Input label="Amount paid ($)"  type="number" {...field("amount_paid")} placeholder="0.00" />
-        </div>
-        <div className="grid grid-cols-3 gap-3">
-          <Select label="Status" {...field("status")}>{STATUSES.map(s=><option key={s}>{s}</option>)}</Select>
-          <Input label="Travelers" type="number" {...field("traveler_count")} placeholder="1" />
-          <Input label="Confirmation #" {...field("confirmation_number")} placeholder="ABC123" />
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <Input label="Booking ref" {...field("booking_ref")} placeholder="REF456" />
-          <Input label="Group name"  {...field("group_name")}  placeholder="Girls Trip, Church Group..." />
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <Input label="Credit balance ($)" type="number" {...field("credit_balance")} placeholder="0.00" />
-          <Input label="Credit notes"       {...field("credit_notes")} placeholder="Balance from previous trip..." />
-        </div>
-        <Textarea label="Notes" {...field("notes")} />
       </Modal>
     </div>
   )
