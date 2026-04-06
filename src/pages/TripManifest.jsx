@@ -185,6 +185,7 @@ export default function TripManifest() {
                       <p className="text-sm font-bold text-slate-800">{name}</p>
                       <Badge label={t.role} color="pink" />
                       {isClient && <Badge label="Client" color="blue" />}
+                      {d.is_minor && <span className="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full font-medium">Minor</span>}
                       {missing.length > 0 && (
                         <span className="flex items-center gap-1 text-xs text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full border border-amber-200">
                           <AlertTriangle size={9}/>Missing: {missing.join(", ")}

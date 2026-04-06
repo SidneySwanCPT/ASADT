@@ -45,7 +45,7 @@ export default function ClientProfile() {
   const [bookTripModal, setBookTripModal] = useState(false)
   const [selectedTrip, setSelectedTrip]   = useState(null)
 
-  const [travelerForm, setTravelerForm] = useState({ full_name:"", date_of_birth:"", relationship:"Self", passport_number:"", passport_expiry:"", notes:"", _mode:"just_traveler", existing_client_id:"" })
+  const [travelerForm, setTravelerForm] = useState({ full_name:"", date_of_birth:"", relationship:"Self", passport_number:"", passport_expiry:"", notes:"", _mode:"just_traveler", existing_client_id:"", is_minor: false })
   const [loyaltyForm, setLoyaltyForm]   = useState({ airline_or_cruise:"Delta", number:"", traveler_id:"" })
   const [tripForm, setTripForm]         = useState({ ...EMPTY_TRIP })
   const [saving, setSaving]             = useState(false)
@@ -109,7 +109,7 @@ export default function ClientProfile() {
       const { data: nc } = await supabase.from("clients").insert({ first_name: parts[0]||travelerForm.full_name, last_name: parts.slice(1).join(" ")||"", date_of_birth: travelerForm.date_of_birth||null, passport_number: travelerForm.passport_number||null, passport_expiry: travelerForm.passport_expiry||null }).select().single()
       if (nc) await supabase.from("travelers").insert({ client_id: id, full_name: travelerForm.full_name, date_of_birth: travelerForm.date_of_birth||null, relationship: travelerForm.relationship, passport_number: travelerForm.passport_number||null, passport_expiry: travelerForm.passport_expiry||null, notes: `Also a client: ${nc.id}.` })
     } else {
-      await supabase.from("travelers").insert({ client_id: id, full_name: travelerForm.full_name, date_of_birth: travelerForm.date_of_birth||null, relationship: travelerForm.relationship, passport_number: travelerForm.passport_number||null, passport_expiry: travelerForm.passport_expiry||null, notes: travelerForm.notes||null })
+      await supabase.from("travelers").insert({ client_id: id, full_name: travelerForm.full_name, date_of_birth: travelerForm.date_of_birth||null, relationship: travelerForm.relationship, passport_number: travelerForm.passport_number||null, passport_expiry: travelerForm.passport_expiry||null, notes: travelerForm.notes||null, is_minor: travelerForm.is_minor||false })
     }
     setSaving(false)
     setTravelerModal(false)
@@ -226,6 +226,12 @@ export default function ClientProfile() {
               <InfoRow label="Emergency"       value={client.emergency_contact_name} />
               <InfoRow label="Emerg. phone"    value={client.emergency_contact_phone} />
               <InfoRow label="Referral"        value={client.referral_source} />
+              {client.is_minor && (
+                <div className="flex items-center gap-2 py-2">
+                  <span className="text-xs text-slate-400 w-36 flex-shrink-0 uppercase tracking-wide">Status</span>
+                  <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-medium">Minor (under 18)</span>
+                </div>
+              )}
             </div>
           </SectionCard>
 
@@ -294,6 +300,7 @@ export default function ClientProfile() {
                       <div className="flex items-center gap-2">
                         <p className="text-sm font-medium text-slate-800">{tv.full_name}</p>
                         {tv.relationship && <Badge label={tv.relationship} color="pink" />}
+                        {tv.is_minor && <span className="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full font-medium">Minor</span>}
                         {tv.notes?.includes("Also a client:") && <span className="text-xs text-green-600 font-medium">✓ Full client</span>}
                       </div>
                       <div className="flex items-center gap-3 mt-0.5 flex-wrap">
@@ -504,6 +511,14 @@ export default function ClientProfile() {
               <Input label="Passport expiry" type="date" {...tf("passport_expiry")} />
             </div>
             <Textarea label="Notes" {...tf("notes")} />
+            <div className="flex items-center gap-3 p-3 bg-purple-50 rounded-lg border border-purple-100">
+              <input type="checkbox" id="tv_minor" checked={travelerForm.is_minor||false}
+                onChange={e => setTravelerForm(f => ({ ...f, is_minor: e.target.checked }))}
+                className="w-4 h-4 accent-purple-500" />
+              <label htmlFor="tv_minor" className="text-sm text-purple-700 font-medium cursor-pointer">
+                This traveler is a minor (under 18)
+              </label>
+            </div>
             {travelerForm._mode === "new_client" && (
               <p className="text-xs text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">A full client record will also be created.</p>
             )}
