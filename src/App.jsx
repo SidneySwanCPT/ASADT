@@ -6,6 +6,7 @@ import Dashboard from "./pages/Dashboard"
 import ClientsPage from "./pages/ClientsPage"
 import ClientProfile from "./pages/ClientProfile"
 import TripsPage from "./pages/TripsPage"
+import TripManifest from "./pages/TripManifest"
 import TasksPage from "./pages/TasksPage"
 import RemindersPage from "./pages/RemindersPage"
 import SuppliersPage from "./pages/SuppliersPage"
@@ -26,15 +27,16 @@ function AppRoutes() {
   if (loading) return null
   return (
     <Routes>
-      <Route path="/login"       element={session ? <Navigate to="/" replace /> : <LoginPage />} />
-      <Route path="/"            element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-      <Route path="/clients"     element={<ProtectedRoute><ClientsPage /></ProtectedRoute>} />
-      <Route path="/clients/:id" element={<ProtectedRoute><ClientProfile /></ProtectedRoute>} />
-      <Route path="/trips"       element={<ProtectedRoute><TripsPage /></ProtectedRoute>} />
-      <Route path="/tasks"       element={<ProtectedRoute><TasksPage /></ProtectedRoute>} />
-      <Route path="/reminders"   element={<ProtectedRoute><RemindersPage /></ProtectedRoute>} />
-      <Route path="/suppliers"   element={<ProtectedRoute><SuppliersPage /></ProtectedRoute>} />
-      <Route path="*"            element={<Navigate to="/" replace />} />
+      <Route path="/login"                   element={session ? <Navigate to="/" replace /> : <LoginPage />} />
+      <Route path="/"                        element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+      <Route path="/clients"                 element={<ProtectedRoute><ClientsPage /></ProtectedRoute>} />
+      <Route path="/clients/:id"             element={<ProtectedRoute><ClientProfile /></ProtectedRoute>} />
+      <Route path="/trips"                   element={<ProtectedRoute><TripsPage /></ProtectedRoute>} />
+      <Route path="/trips/:id/manifest"      element={<ProtectedRoute><TripManifest /></ProtectedRoute>} />
+      <Route path="/tasks"                   element={<ProtectedRoute><TasksPage /></ProtectedRoute>} />
+      <Route path="/reminders"               element={<ProtectedRoute><RemindersPage /></ProtectedRoute>} />
+      <Route path="/suppliers"               element={<ProtectedRoute><SuppliersPage /></ProtectedRoute>} />
+      <Route path="*"                        element={<Navigate to="/" replace />} />
     </Routes>
   )
 }

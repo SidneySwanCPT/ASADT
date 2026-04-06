@@ -2,237 +2,148 @@ import { useEffect, useState } from "react"
 import { useParams, useNavigate, Link } from "react-router-dom"
 import { supabase } from "../lib/supabase"
 import { format } from "date-fns"
-import { ArrowLeft, Globe, CheckSquare, FileText, Mail, Phone, Plus, Trash2, Edit2, Star, AlertTriangle, UserPlus, Sparkles, Download, PhoneCall } from "lucide-react"
-import { Card, Button, StatusBadge, OccasionBadge, Spinner, Modal, Input, Select, Textarea, Badge, InfoRow, SectionCard, MissingDataWarning } from "../components/UI"
+import { ArrowLeft, Mail, Phone, Plus, Trash2, Edit2, AlertTriangle, UserPlus, Sparkles, Phone as PhoneIcon, Printer, Globe } from "lucide-react"
+import { Button, StatusBadge, OccasionBadge, Spinner, Modal, Input, Select, Textarea, Badge, InfoRow, SectionCard, MissingDataWarning } from "../components/UI"
 import AIEmailComposer from "../components/AIEmailComposer"
 import AIClientBriefing from "../components/AIClientBriefing"
+import { generateClientCard } from "../lib/clientCard"
 
 const RELATIONSHIPS = ["Self","Spouse","Partner","Child","Parent","Sibling","Friend","Other"]
-const AIRLINES = ["Delta","Southwest","American","United","Spirit","Frontier","Carnival","Royal Caribbean","Norwegian","MSC","Celebrity","Other"]
+const AIRLINES      = ["Delta","Southwest","American","United","Spirit","Frontier","Carnival","Royal Caribbean","Norwegian","MSC","Celebrity","Other"]
+const STATUSES      = ["Quoted","Confirmed","Paid","Departed","Completed","Cancelled"]
+const OCCASIONS     = ["","Birthday","Anniversary","Honeymoon","Girls Trip","Business","Family","Group","Other"]
+const EMPTY_TRIP    = { destination:"", departure_date:"", return_date:"", status:"Quoted", total_price:"", amount_paid:"0", booking_ref:"", confirmation_number:"", traveler_count:"1", occasion:"", credit_balance:"0", credit_notes:"", group_name:"", notes:"" }
 
-function getMissingFields(client) {
-  const critical = []
-  if (!client.email) critical.push("email")
-  if (!client.phone) critical.push("phone")
-  if (!client.passport_number) critical.push("passport #")
-  if (!client.passport_expiry) critical.push("passport expiry")
-  if (!client.date_of_birth) critical.push("date of birth")
-  if (!client.emergency_contact_name) critical.push("emergency contact")
-  return critical
+function getMissingFields(c) {
+  const m = []
+  if (!c.email)                  m.push("email")
+  if (!c.phone)                  m.push("phone")
+  if (!c.passport_number)        m.push("passport #")
+  if (!c.passport_expiry)        m.push("passport expiry")
+  if (!c.date_of_birth)          m.push("date of birth")
+  if (!c.emergency_contact_name) m.push("emergency contact")
+  return m
 }
 
 export default function ClientProfile() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const [client, setClient]       = useState(null)
-  const [trips, setTrips]         = useState([])
-  const [tasks, setTasks]         = useState([])
-  const [docs, setDocs]           = useState([])
-  const [travelers, setTravelers] = useState([])
-  const [loyalty, setLoyalty]     = useState([])
+
+  const [client, setClient]         = useState(null)
+  const [trips, setTrips]           = useState([])
+  const [tasks, setTasks]           = useState([])
+  const [travelers, setTravelers]   = useState([])
+  const [loyalty, setLoyalty]       = useState([])
   const [allClients, setAllClients] = useState([])
-  const [loading, setLoading]     = useState(true)
+  const [coByTrip, setCoByTrip]     = useState({})
+  const [loading, setLoading]       = useState(true)
 
   const [travelerModal, setTravelerModal] = useState(false)
   const [loyaltyModal, setLoyaltyModal]   = useState(false)
-  const [travelerForm, setTravelerForm]   = useState({ full_name:"", date_of_birth:"", relationship:"Self", passport_number:"", passport_expiry:"", notes:"", link_as_client: false, existing_client_id:"" })
-  const [loyaltyForm, setLoyaltyForm]     = useState({ airline_or_cruise:"Delta", number:"", traveler_id:"" })
-  const [saving, setSaving]               = useState(false)
-  const [showEmailAI, setShowEmailAI]     = useState(false)
-  const [showBriefing, setShowBriefing]   = useState(false)
-  const [selectedTripForEmail, setSelectedTripForEmail] = useState(null)
+  const [emailModal, setEmailModal]       = useState(false)
+  const [briefingOpen, setBriefingOpen]   = useState(false)
+  const [bookTripModal, setBookTripModal] = useState(false)
+  const [selectedTrip, setSelectedTrip]   = useState(null)
+
+  const [travelerForm, setTravelerForm] = useState({ full_name:"", date_of_birth:"", relationship:"Self", passport_number:"", passport_expiry:"", notes:"", _mode:"just_traveler", existing_client_id:"" })
+  const [loyaltyForm, setLoyaltyForm]   = useState({ airline_or_cruise:"Delta", number:"", traveler_id:"" })
+  const [tripForm, setTripForm]         = useState({ ...EMPTY_TRIP })
+  const [saving, setSaving]             = useState(false)
 
   const load = async () => {
-    const [{ data: c }, { data: t }, { data: tk }, { data: d }, { data: tv }, { data: ly }, { data: ac }] = await Promise.all([
+    const [{ data: c }, { data: t }, { data: tk }, { data: tv }, { data: ly }, { data: ac }] = await Promise.all([
       supabase.from("clients").select("*").eq("id", id).single(),
       supabase.from("trips").select("*").eq("client_id", id).order("departure_date", { ascending: false }),
       supabase.from("tasks").select("*").eq("client_id", id).eq("completed", false).order("due_date"),
-      supabase.from("documents").select("*").eq("client_id", id).order("uploaded_at", { ascending: false }),
       supabase.from("travelers").select("*").eq("client_id", id).order("created_at"),
       supabase.from("loyalty_numbers").select("*, travelers(full_name)").eq("client_id", id),
       supabase.from("clients").select("id,first_name,last_name").order("last_name"),
     ])
+
     setClient(c)
     setTrips(t || [])
     setTasks(tk || [])
-    setDocs(d || [])
     setTravelers(tv || [])
     setLoyalty(ly || [])
     setAllClients((ac || []).filter(x => x.id !== id))
+
+    // Load co-travelers from group memberships
+    if (t && t.length > 0) {
+      const tripIds = t.map(tr => tr.id)
+      const { data: groups } = await supabase.from("groups").select("id,name,trip_id").in("trip_id", tripIds)
+      if (groups && groups.length > 0) {
+        const groupIds = groups.map(g => g.id)
+        const { data: members } = await supabase
+          .from("group_members")
+          .select("*, clients(id,first_name,last_name,email,phone), travelers(full_name)")
+          .in("group_id", groupIds)
+          .eq("removed", false)
+          .neq("client_id", id)
+
+        const cbt = {}
+        ;(members || []).forEach(m => {
+          const group = groups.find(g => g.id === m.group_id)
+          const trip  = (t || []).find(tr => tr.id === group?.trip_id)
+          const key   = group?.trip_id
+          if (!key) return
+          if (!cbt[key]) cbt[key] = { tripName: trip?.destination || group?.name, tripId: key, members: [] }
+          cbt[key].members.push(m)
+        })
+        setCoByTrip(cbt)
+      }
+    }
+
     setLoading(false)
-  }
-
-
-  const exportPDF = () => {
-    const missingFields = getMissingFields(client)
-    const upTrips = trips.filter(t => t.departure_date && new Date(t.departure_date) >= new Date() && t.status !== "Cancelled")
-    const html = `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8"/>
-  <title>Client Card — ${client.first_name} ${client.last_name}</title>
-  <style>
-    body { font-family: Georgia, serif; padding: 40px; color: #1a1a2e; max-width: 700px; margin: 0 auto; }
-    h1 { color: #8B1A4A; font-size: 26px; margin: 0 0 4px; }
-    .sub { color: #9d2558; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 24px; }
-    .section { margin-bottom: 20px; border-top: 1px solid #F4A7C3; padding-top: 12px; }
-    .section-title { font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; color: #9d2558; font-weight: bold; margin-bottom: 8px; }
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 20px; }
-    .row { font-size: 13px; display: flex; gap: 8px; }
-    .label { color: #888; min-width: 130px; flex-shrink: 0; }
-    .value { color: #1a1a2e; font-weight: normal; }
-    .trip { background: #fdf2f7; border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
-    .trip-dest { font-size: 14px; font-weight: bold; color: #8B1A4A; }
-    .trip-detail { font-size: 12px; color: #666; margin-top: 2px; }
-    .warn { background: #fff8e1; border: 1px solid #ffe082; border-radius: 6px; padding: 8px 12px; font-size: 12px; color: #795548; margin-bottom: 16px; }
-    .footer { margin-top: 40px; border-top: 2px solid #F4A7C3; padding-top: 12px; text-align: center; color: #9d2558; font-size: 11px; letter-spacing: 1px; }
-    @media print { body { padding: 20px; } }
-  </style>
-</head>
-<body>
-  <h1>${client.first_name} ${client.last_name}</h1>
-  <div class="sub">ASA Destination Travel — Client Card</div>
-  ${missingFields.length > 0 ? `<div class="warn">⚠ Missing information: ${missingFields.join(", ")}</div>` : ""}
-  <div class="section">
-    <div class="section-title">Contact</div>
-    <div class="grid">
-      ${client.email ? `<div class="row"><span class="label">Email</span><span class="value">${client.email}</span></div>` : ""}
-      ${client.phone ? `<div class="row"><span class="label">Phone</span><span class="value">${client.phone}</span></div>` : ""}
-      ${client.home_airport ? `<div class="row"><span class="label">Home airport</span><span class="value">${client.home_airport}</span></div>` : ""}
-      ${client.typical_budget ? `<div class="row"><span class="label">Budget</span><span class="value">${client.typical_budget}</span></div>` : ""}
-    </div>
-  </div>
-  <div class="section">
-    <div class="section-title">Passport & Emergency</div>
-    <div class="grid">
-      ${client.date_of_birth ? `<div class="row"><span class="label">Date of birth</span><span class="value">${new Date(client.date_of_birth).toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric"})}</span></div>` : ""}
-      ${client.nationality ? `<div class="row"><span class="label">Nationality</span><span class="value">${client.nationality}</span></div>` : ""}
-      ${client.passport_number ? `<div class="row"><span class="label">Passport #</span><span class="value">${client.passport_number}</span></div>` : ""}
-      ${client.passport_expiry ? `<div class="row"><span class="label">Passport expiry</span><span class="value">${new Date(client.passport_expiry).toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric"})}</span></div>` : ""}
-      ${client.emergency_contact_name ? `<div class="row"><span class="label">Emergency contact</span><span class="value">${client.emergency_contact_name}</span></div>` : ""}
-      ${client.emergency_contact_phone ? `<div class="row"><span class="label">Emergency phone</span><span class="value">${client.emergency_contact_phone}</span></div>` : ""}
-    </div>
-  </div>
-  <div class="section">
-    <div class="section-title">Travel Preferences</div>
-    <div class="grid">
-      ${client.preferred_airline ? `<div class="row"><span class="label">Preferred airline</span><span class="value">${client.preferred_airline}</span></div>` : ""}
-      ${client.preferred_cruise_line ? `<div class="row"><span class="label">Cruise line</span><span class="value">${client.preferred_cruise_line}</span></div>` : ""}
-      ${client.preferred_seat ? `<div class="row"><span class="label">Seat preference</span><span class="value">${client.preferred_seat}</span></div>` : ""}
-      ${client.preferred_cabin ? `<div class="row"><span class="label">Cabin class</span><span class="value">${client.preferred_cabin}</span></div>` : ""}
-      ${client.preferred_hotel_tier ? `<div class="row"><span class="label">Hotel preference</span><span class="value">${client.preferred_hotel_tier}</span></div>` : ""}
-      ${client.preferred_transport ? `<div class="row"><span class="label">Transport</span><span class="value">${client.preferred_transport}</span></div>` : ""}
-      ${client.dietary_restrictions ? `<div class="row"><span class="label">Dietary</span><span class="value">${client.dietary_restrictions}</span></div>` : ""}
-      ${client.special_needs ? `<div class="row"><span class="label">Special needs</span><span class="value">${client.special_needs}</span></div>` : ""}
-    </div>
-    ${client.preferences ? `<div class="row" style="margin-top:8px"><span class="label">Notes</span><span class="value">${client.preferences}</span></div>` : ""}
-  </div>
-  ${travelers.length > 0 ? `
-  <div class="section">
-    <div class="section-title">Travelers (${travelers.length})</div>
-    <div class="grid">${travelers.map(t => `<div class="row"><span class="label">${t.relationship||"Traveler"}</span><span class="value">${t.full_name}${t.date_of_birth?" · DOB: "+new Date(t.date_of_birth).toLocaleDateString():""}</span></div>`).join("")}</div>
-  </div>` : ""}
-  ${loyalty.length > 0 ? `
-  <div class="section">
-    <div class="section-title">Loyalty Numbers</div>
-    <div class="grid">${loyalty.map(l => `<div class="row"><span class="label">${l.airline_or_cruise}</span><span class="value">${l.number}${l.travelers?" ("+l.travelers.full_name+")":""}</span></div>`).join("")}</div>
-  </div>` : ""}
-  ${upTrips.length > 0 ? `
-  <div class="section">
-    <div class="section-title">Upcoming Trips</div>
-    ${upTrips.map(t => `
-    <div class="trip">
-      <div class="trip-dest">${t.destination}</div>
-      <div class="trip-detail">
-        ${t.departure_date ? new Date(t.departure_date).toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"}) : "TBD"}
-        ${t.return_date ? " → " + new Date(t.return_date).toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric"}) : ""}
-        · ${t.status}
-        ${t.occasion ? " · " + t.occasion : ""}
-        ${(t.total_price - t.amount_paid) > 0 ? " · Balance due: $" + (t.total_price - t.amount_paid).toLocaleString() : " · Paid in full"}
-      </div>
-    </div>`).join("")}
-  </div>` : ""}
-  <div class="footer">ASA DESTINATION TRAVEL · Generated ${new Date().toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric"})}</div>
-</body>
-</html>`
-    const w = window.open("","_blank")
-    w.document.write(html)
-    w.document.close()
-    setTimeout(() => w.print(), 500)
   }
 
   useEffect(() => { load() }, [id])
 
   const saveTraveler = async () => {
     setSaving(true)
-    if (travelerForm.link_as_client && travelerForm.existing_client_id) {
-      // Link existing client as traveler
-      const existing = allClients.find(c => c.id === travelerForm.existing_client_id)
-      if (existing) {
-        await supabase.from("travelers").insert({
-          client_id: id,
-          full_name: `${existing.first_name} ${existing.last_name}`,
-          relationship: travelerForm.relationship,
-          notes: `Linked client: ${existing.id}`
-        })
-      }
-    } else if (travelerForm.link_as_client && !travelerForm.existing_client_id) {
-      // Create new client AND traveler
-      const { data: newClient } = await supabase.from("clients").insert({
-        first_name: travelerForm.full_name.split(" ")[0] || travelerForm.full_name,
-        last_name:  travelerForm.full_name.split(" ").slice(1).join(" ") || "",
-        date_of_birth: travelerForm.date_of_birth || null,
-        passport_number: travelerForm.passport_number || null,
-        passport_expiry: travelerForm.passport_expiry || null,
-        notes: travelerForm.notes || null,
-      }).select().single()
-      if (newClient) {
-        await supabase.from("travelers").insert({
-          client_id: id,
-          full_name: travelerForm.full_name,
-          date_of_birth: travelerForm.date_of_birth || null,
-          relationship: travelerForm.relationship,
-          passport_number: travelerForm.passport_number || null,
-          passport_expiry: travelerForm.passport_expiry || null,
-          notes: `Also a client: ${newClient.id}. ${travelerForm.notes || ""}`,
-        })
-      }
+    const mode = travelerForm._mode || "just_traveler"
+    if (mode === "existing_client" && travelerForm.existing_client_id) {
+      const ex = allClients.find(c => c.id === travelerForm.existing_client_id)
+      if (ex) await supabase.from("travelers").insert({ client_id: id, full_name: `${ex.first_name} ${ex.last_name}`, relationship: travelerForm.relationship, notes: `Linked client: ${ex.id}` })
+    } else if (mode === "new_client") {
+      const parts = travelerForm.full_name.split(" ")
+      const { data: nc } = await supabase.from("clients").insert({ first_name: parts[0]||travelerForm.full_name, last_name: parts.slice(1).join(" ")||"", date_of_birth: travelerForm.date_of_birth||null, passport_number: travelerForm.passport_number||null, passport_expiry: travelerForm.passport_expiry||null }).select().single()
+      if (nc) await supabase.from("travelers").insert({ client_id: id, full_name: travelerForm.full_name, date_of_birth: travelerForm.date_of_birth||null, relationship: travelerForm.relationship, passport_number: travelerForm.passport_number||null, passport_expiry: travelerForm.passport_expiry||null, notes: `Also a client: ${nc.id}.` })
     } else {
-      // Just add as traveler
-      await supabase.from("travelers").insert({
-        client_id: id,
-        full_name: travelerForm.full_name,
-        date_of_birth: travelerForm.date_of_birth || null,
-        relationship: travelerForm.relationship,
-        passport_number: travelerForm.passport_number || null,
-        passport_expiry: travelerForm.passport_expiry || null,
-        notes: travelerForm.notes || null,
-      })
+      await supabase.from("travelers").insert({ client_id: id, full_name: travelerForm.full_name, date_of_birth: travelerForm.date_of_birth||null, relationship: travelerForm.relationship, passport_number: travelerForm.passport_number||null, passport_expiry: travelerForm.passport_expiry||null, notes: travelerForm.notes||null })
     }
     setSaving(false)
     setTravelerModal(false)
-    setTravelerForm({ full_name:"", date_of_birth:"", relationship:"Self", passport_number:"", passport_expiry:"", notes:"", link_as_client: false, existing_client_id:"" })
+    setTravelerForm({ full_name:"", date_of_birth:"", relationship:"Self", passport_number:"", passport_expiry:"", notes:"", _mode:"just_traveler", existing_client_id:"" })
     load()
   }
 
   const saveLoyalty = async () => {
     setSaving(true)
-    await supabase.from("loyalty_numbers").insert({ ...loyaltyForm, client_id: id, traveler_id: loyaltyForm.traveler_id || null })
-    setSaving(false)
-    setLoyaltyModal(false)
+    await supabase.from("loyalty_numbers").insert({ ...loyaltyForm, client_id: id, traveler_id: loyaltyForm.traveler_id||null })
+    setSaving(false); setLoyaltyModal(false)
     setLoyaltyForm({ airline_or_cruise:"Delta", number:"", traveler_id:"" })
     load()
   }
 
+  const saveTrip = async () => {
+    setSaving(true)
+    const payload = { ...tripForm, client_id: id, total_price: parseFloat(tripForm.total_price)||0, amount_paid: parseFloat(tripForm.amount_paid)||0, credit_balance: parseFloat(tripForm.credit_balance)||0, occasion: tripForm.occasion||null }
+    const { data: newTrip } = await supabase.from("trips").insert(payload).select().single()
+    if (tripForm.group_name && newTrip) {
+      const { data: grp } = await supabase.from("groups").insert({ name: tripForm.group_name, trip_id: newTrip.id, lead_client_id: id, status: "Active" }).select().single()
+      if (grp) await supabase.from("trips").update({ group_id: grp.id }).eq("id", newTrip.id)
+    }
+    setSaving(false); setBookTripModal(false)
+    setTripForm({ ...EMPTY_TRIP }); load()
+  }
+
   const deleteTraveler = async (tid) => {
     if (!confirm("Remove this traveler?")) return
-    await supabase.from("travelers").delete().eq("id", tid)
-    load()
+    await supabase.from("travelers").delete().eq("id", tid); load()
   }
 
   const deleteLoyalty = async (lid) => {
-    await supabase.from("loyalty_numbers").delete().eq("id", lid)
-    load()
+    await supabase.from("loyalty_numbers").delete().eq("id", lid); load()
   }
 
   const completeTask = async (taskId) => {
@@ -240,78 +151,84 @@ export default function ClientProfile() {
     setTasks(t => t.filter(x => x.id !== taskId))
   }
 
-  const tf = (k) => ({ value: travelerForm[k] || "", onChange: e => setTravelerForm(f => ({ ...f, [k]: e.target.value })) })
-  const lf = (k) => ({ value: loyaltyForm[k]  || "", onChange: e => setLoyaltyForm(f => ({  ...f, [k]: e.target.value })) })
+  const tf = (k) => ({ value: travelerForm[k]||"", onChange: e => setTravelerForm(f => ({ ...f, [k]: e.target.value })) })
+  const lf = (k) => ({ value: loyaltyForm[k] ||"", onChange: e => setLoyaltyForm(f =>  ({ ...f, [k]: e.target.value })) })
+  const bf = (k) => ({ value: tripForm[k]    ??"", onChange: e => setTripForm(f =>     ({ ...f, [k]: e.target.value })) })
 
   if (loading) return <Spinner />
   if (!client) return <div className="p-6 text-slate-500">Client not found.</div>
 
-  const missing = getMissingFields(client)
+  const missing       = getMissingFields(client)
   const upcomingTrips = trips.filter(t => t.departure_date && new Date(t.departure_date) >= new Date() && t.status !== "Cancelled")
-  const pastTrips     = trips.filter(t => !t.departure_date || new Date(t.departure_date) < new Date() || t.status === "Completed")
+  const pastTrips     = trips.filter(t => !upcomingTrips.includes(t))
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-5">
 
       {/* Header */}
       <div className="flex items-center gap-3">
-        <button onClick={() => navigate("/clients")} className="text-slate-400 hover:text-brand-500 transition-colors p-1 rounded-lg hover:bg-brand-50">
-          <ArrowLeft size={18} />
+        <button onClick={() => navigate("/clients")} className="text-slate-400 hover:text-brand-500 p-1 rounded-lg hover:bg-brand-50 transition-colors">
+          <ArrowLeft size={18}/>
         </button>
         <div className="w-12 h-12 rounded-full flex items-center justify-center text-white text-base font-bold flex-shrink-0" style={{background:"#8B1A4A"}}>
           {client.first_name?.[0]}{client.last_name?.[0]}
         </div>
         <div className="flex-1">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <h1 className="text-xl font-bold text-slate-800" style={{fontFamily:"Georgia,serif"}}>{client.first_name} {client.last_name}</h1>
             {missing.length > 0 && (
               <span className="flex items-center gap-1 text-xs text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
-                <AlertTriangle size={10} />{missing.length} missing
+                <AlertTriangle size={10}/>{missing.length} missing
               </span>
             )}
           </div>
-          <div className="flex items-center gap-3 mt-0.5 flex-wrap">
-            {client.email && <span className="flex items-center gap-1 text-xs text-slate-400"><Mail size={10}/>{client.email}</span>}
-            {client.phone && <span className="flex items-center gap-1 text-xs text-slate-400"><Phone size={10}/>{client.phone}</span>}
-            {client.home_airport && <span className="text-xs text-brand-500 font-medium">{client.home_airport}</span>}
-            {client.typical_budget && <span className="text-xs text-slate-400">Budget: {client.typical_budget}</span>}
+          <div className="flex items-center gap-4 mt-0.5 flex-wrap">
+            {client.email && (
+              <a href={`mailto:${client.email}`} className="flex items-center gap-1.5 text-sm text-brand-600 hover:text-brand-800 font-medium transition-colors">
+                <Mail size={13}/>{client.email}
+              </a>
+            )}
+            {client.phone && (
+              <a href={`tel:${client.phone}`} className="flex items-center gap-1.5 text-sm text-brand-600 hover:text-brand-800 font-medium transition-colors">
+                <Phone size={13}/>{client.phone}
+              </a>
+            )}
+            {client.home_airport && <span className="text-xs text-brand-500 font-medium bg-brand-50 px-2 py-0.5 rounded-full">{client.home_airport}</span>}
           </div>
         </div>
-        <div className="flex gap-2">
-          <Button variant="ghost" size="sm" onClick={() => setShowBriefing(true)} className="text-purple-600 hover:bg-purple-50">
-            <PhoneCall size={12}/>Pre-call briefing
+        <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
+          <Button variant="primary" size="sm" onClick={() => setBookTripModal(true)}>
+            <Globe size={12}/>Book trip
           </Button>
-          <Button variant="ghost" size="sm" onClick={() => { setSelectedTripForEmail(upcomingTrips[0]||null); setShowEmailAI(true) }} className="text-brand-600 hover:bg-brand-50">
+          <Button variant="secondary" size="sm" onClick={() => setBriefingOpen(true)}>
+            <PhoneIcon size={12}/>Prep for call
+          </Button>
+          <Button variant="pink" size="sm" onClick={() => { setSelectedTrip(null); setEmailModal(true) }}>
             <Sparkles size={12}/>Draft email
           </Button>
-          <Button variant="ghost" size="sm" onClick={exportPDF} className="text-slate-600 hover:bg-slate-50">
-            <Download size={12}/>Client card
+          <Button variant="secondary" size="sm" onClick={() => generateClientCard(client, trips, travelers, loyalty)}>
+            <Printer size={12}/>Client card
           </Button>
-          <Link to="/clients"><Button variant="secondary" size="sm"><Edit2 size={12}/>Edit</Button></Link>
         </div>
       </div>
 
-      {/* Missing data warning */}
       {missing.length > 0 && <MissingDataWarning fields={missing} />}
 
       <div className="grid lg:grid-cols-3 gap-5">
         {/* Left col */}
         <div className="space-y-4">
-
-          {/* Profile */}
           <SectionCard title="Profile">
             <div className="px-4 py-2">
-              <InfoRow label="Date of birth"   value={client.date_of_birth ? format(new Date(client.date_of_birth), "MMM d, yyyy") : null} />
+              <InfoRow label="Date of birth"   value={client.date_of_birth ? format(new Date(client.date_of_birth),"MMM d, yyyy") : null} />
               <InfoRow label="Nationality"     value={client.nationality} />
               <InfoRow label="Passport no."    value={client.passport_number} />
-              <InfoRow label="Passport expiry" value={client.passport_expiry ? format(new Date(client.passport_expiry), "MMM d, yyyy") : null} />
+              <InfoRow label="Passport expiry" value={client.passport_expiry ? format(new Date(client.passport_expiry),"MMM d, yyyy") : null} />
               <InfoRow label="Emergency"       value={client.emergency_contact_name} />
               <InfoRow label="Emerg. phone"    value={client.emergency_contact_phone} />
               <InfoRow label="Referral"        value={client.referral_source} />
             </div>
           </SectionCard>
 
-          {/* Travel preferences */}
           <SectionCard title="Travel preferences">
             <div className="px-4 py-2">
               <InfoRow label="Airline"       value={client.preferred_airline} />
@@ -320,30 +237,27 @@ export default function ClientProfile() {
               <InfoRow label="Cabin"         value={client.preferred_cabin} />
               <InfoRow label="Hotel"         value={client.preferred_hotel_tier} />
               <InfoRow label="Transport"     value={client.preferred_transport} />
-              <InfoRow label="Rental car"    value={client.preferred_rental_car} />
               <InfoRow label="Home airport"  value={client.home_airport} />
               <InfoRow label="Budget"        value={client.typical_budget} />
               <InfoRow label="Dietary"       value={client.dietary_restrictions} />
               <InfoRow label="Special needs" value={client.special_needs} />
               {client.preferences && (
                 <div className="py-2">
-                  <p className="text-xs text-slate-400 uppercase tracking-wide mb-1">General notes</p>
+                  <p className="text-xs text-slate-400 uppercase tracking-wide mb-1">Notes</p>
                   <p className="text-sm text-slate-700 leading-relaxed">{client.preferences}</p>
                 </div>
               )}
             </div>
           </SectionCard>
 
-          {/* Notes */}
           {client.notes && (
             <SectionCard title="Notes">
               <p className="text-sm text-slate-700 leading-relaxed px-4 py-3">{client.notes}</p>
             </SectionCard>
           )}
 
-          {/* Loyalty numbers */}
           <SectionCard title="Loyalty numbers"
-            action={<button onClick={() => setLoyaltyModal(true)} className="text-brand-500 hover:text-brand-700 transition-colors"><Plus size={14}/></button>}>
+            action={<button onClick={() => setLoyaltyModal(true)} className="text-brand-500 hover:text-brand-700"><Plus size={14}/></button>}>
             <div className="px-4 py-2">
               {loyalty.length === 0
                 ? <p className="text-xs text-slate-400 py-2 text-center">No loyalty numbers yet</p>
@@ -370,7 +284,7 @@ export default function ClientProfile() {
             action={<Button size="sm" variant="pink" onClick={() => setTravelerModal(true)}><UserPlus size={12}/>Add traveler</Button>}>
             <div className="divide-y divide-slate-50">
               {travelers.length === 0
-                ? <p className="text-sm text-slate-400 px-4 py-4 text-center">No travelers added yet. Add family members or frequent travel companions.</p>
+                ? <p className="text-sm text-slate-400 px-4 py-4 text-center">No travelers added yet.</p>
                 : travelers.map(tv => (
                   <div key={tv.id} className="px-4 py-3 flex items-center gap-3">
                     <div className="w-8 h-8 rounded-full bg-brand-100 flex items-center justify-center text-brand-600 text-xs font-bold flex-shrink-0">
@@ -380,18 +294,12 @@ export default function ClientProfile() {
                       <div className="flex items-center gap-2">
                         <p className="text-sm font-medium text-slate-800">{tv.full_name}</p>
                         {tv.relationship && <Badge label={tv.relationship} color="pink" />}
+                        {tv.notes?.includes("Also a client:") && <span className="text-xs text-green-600 font-medium">✓ Full client</span>}
                       </div>
                       <div className="flex items-center gap-3 mt-0.5 flex-wrap">
-                        {tv.date_of_birth && <span className="text-xs text-slate-400">DOB: {format(new Date(tv.date_of_birth), "MMM d, yyyy")}</span>}
+                        {tv.date_of_birth && <span className="text-xs text-slate-400">DOB: {format(new Date(tv.date_of_birth),"MMM d, yyyy")}</span>}
                         {tv.passport_number && <span className="text-xs text-slate-400">PP: {tv.passport_number}</span>}
-                        {tv.passport_expiry && <span className="text-xs text-slate-400">Exp: {format(new Date(tv.passport_expiry), "MMM d, yyyy")}</span>}
                       </div>
-                      {tv.notes && tv.notes.includes("Also a client:") && (
-                        <span className="text-xs text-green-600 font-medium">✓ Full client record</span>
-                      )}
-                      {tv.notes && tv.notes.includes("Linked client:") && (
-                        <span className="text-xs text-blue-600 font-medium">↗ Linked to existing client</span>
-                      )}
                     </div>
                     <button onClick={() => deleteTraveler(tv.id)} className="text-slate-300 hover:text-red-400 transition-colors flex-shrink-0"><Trash2 size={14}/></button>
                   </div>
@@ -400,9 +308,49 @@ export default function ClientProfile() {
             </div>
           </SectionCard>
 
+          {/* Travel companions (co-travelers from group trips) */}
+          {Object.values(coByTrip).length > 0 && (
+            <SectionCard title="Travel companions">
+              <div className="divide-y divide-slate-50">
+                {Object.values(coByTrip).map(group => (
+                  <div key={group.tripId} className="px-4 py-3">
+                    <div className="flex items-center justify-between mb-2.5">
+                      <p className="text-xs font-semibold text-brand-600 flex items-center gap-1.5">
+                        <Globe size={11}/>{group.tripName}
+                      </p>
+                      <Link to={`/trips/${group.tripId}/manifest`}
+                        className="text-xs text-brand-400 hover:text-brand-600 font-medium transition-colors">
+                        View manifest →
+                      </Link>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {group.members.map((m, i) => {
+                        const name     = m.clients ? `${m.clients.first_name} ${m.clients.last_name}` : m.travelers?.full_name || "Unknown"
+                        const initials = name.split(" ").map(n => n[0]).join("").slice(0,2).toUpperCase()
+                        const payColor = m.payment_status === "Paid in Full" ? "green" : m.payment_status === "Pending" ? "gray" : "amber"
+                        return (
+                          <div key={i} className="flex items-center gap-2 bg-brand-50 border border-brand-100 rounded-lg px-2.5 py-1.5">
+                            <div className="w-6 h-6 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0" style={{background:"#8B1A4A"}}>
+                              {initials}
+                            </div>
+                            {m.clients
+                              ? <Link to={`/clients/${m.clients.id}`} className="text-xs font-medium text-brand-700 hover:text-brand-900 transition-colors">{name}</Link>
+                              : <span className="text-xs font-medium text-brand-700">{name}</span>
+                            }
+                            <Badge label={m.payment_status || "Pending"} color={payColor} />
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </SectionCard>
+          )}
+
           {/* Upcoming trips */}
           <SectionCard title={`Upcoming trips (${upcomingTrips.length})`}
-            action={<Link to="/trips"><Button size="sm" variant="pink"><Plus size={12}/>New trip</Button></Link>}>
+            action={<Button size="sm" variant="pink" onClick={() => setBookTripModal(true)}><Plus size={12}/>New trip</Button>}>
             <div className="divide-y divide-slate-50">
               {upcomingTrips.length === 0
                 ? <p className="text-sm text-slate-400 px-4 py-4 text-center">No upcoming trips.</p>
@@ -412,19 +360,23 @@ export default function ClientProfile() {
                       <div className="flex items-center gap-2">
                         <p className="text-sm font-semibold text-slate-800">{t.destination}</p>
                         {t.occasion && <OccasionBadge occasion={t.occasion} />}
+                        {t.group_name && <Badge label={t.group_name} color="purple" />}
                       </div>
                       <p className="text-xs text-slate-400 mt-0.5">
-                        {t.departure_date ? format(new Date(t.departure_date), "MMM d") : "TBD"}
-                        {t.return_date ? ` → ${format(new Date(t.return_date), "MMM d, yyyy")}` : ""}
+                        {t.departure_date ? format(new Date(t.departure_date),"MMM d") : "TBD"}
+                        {t.return_date ? ` → ${format(new Date(t.return_date),"MMM d, yyyy")}` : ""}
                         {t.confirmation_number ? ` · ${t.confirmation_number}` : ""}
-                        {t.group_name ? ` · ${t.group_name}` : ""}
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
+                      <button onClick={() => { setSelectedTrip(t); setEmailModal(true) }}
+                        className="text-xs text-brand-400 hover:text-brand-600 flex items-center gap-1 transition-colors">
+                        <Sparkles size={11}/>Email
+                      </button>
                       <div className="text-right">
                         <p className="text-xs text-green-600">${parseFloat(t.amount_paid||0).toLocaleString()} paid</p>
-                        {(parseFloat(t.total_price||0) - parseFloat(t.amount_paid||0)) > 0 && (
-                          <p className="text-xs text-red-500">${(parseFloat(t.total_price||0) - parseFloat(t.amount_paid||0)).toLocaleString()} due</p>
+                        {(parseFloat(t.total_price||0)-parseFloat(t.amount_paid||0)) > 0 && (
+                          <p className="text-xs text-red-500">${(parseFloat(t.total_price||0)-parseFloat(t.amount_paid||0)).toLocaleString()} due</p>
                         )}
                       </div>
                       <StatusBadge status={t.status} />
@@ -444,9 +396,8 @@ export default function ClientProfile() {
                     <div>
                       <p className="text-sm text-slate-700">{t.destination}</p>
                       <p className="text-xs text-slate-400">
-                        {t.departure_date ? format(new Date(t.departure_date), "MMM d, yyyy") : "—"}
+                        {t.departure_date ? format(new Date(t.departure_date),"MMM d, yyyy") : "—"}
                         {t.occasion ? ` · ${t.occasion}` : ""}
-                        {t.notes ? ` · ${t.notes}` : ""}
                       </p>
                     </div>
                     <StatusBadge status={t.status} />
@@ -467,29 +418,9 @@ export default function ClientProfile() {
                       className="w-4 h-4 rounded border border-slate-300 hover:border-brand-400 flex-shrink-0 transition-colors" />
                     <div className="flex-1">
                       <p className="text-sm text-slate-800">{task.title}</p>
-                      {task.due_date && <p className="text-xs text-slate-400">Due {format(new Date(task.due_date), "MMM d, yyyy")}</p>}
+                      {task.due_date && <p className="text-xs text-slate-400">Due {format(new Date(task.due_date),"MMM d, yyyy")}</p>}
                     </div>
                     <StatusBadge status={task.priority} />
-                  </div>
-                ))}
-              </div>
-            </SectionCard>
-          )}
-
-          {/* Documents */}
-          {docs.length > 0 && (
-            <SectionCard title={`Documents (${docs.length})`}
-              action={<Link to="/documents"><Button size="sm" variant="pink"><Plus size={12}/>Upload</Button></Link>}>
-              <div className="divide-y divide-slate-50">
-                {docs.map(doc => (
-                  <div key={doc.id} className="px-4 py-2.5 flex items-center justify-between">
-                    <div>
-                      <p className="text-sm text-slate-800">{doc.name}</p>
-                      <p className="text-xs text-slate-400">{doc.category} · {format(new Date(doc.uploaded_at), "MMM d, yyyy")}</p>
-                    </div>
-                    <a href={doc.file_url} target="_blank" rel="noreferrer">
-                      <Button size="sm" variant="secondary">View</Button>
-                    </a>
                   </div>
                 ))}
               </div>
@@ -498,98 +429,98 @@ export default function ClientProfile() {
         </div>
       </div>
 
+      {/* Book Trip Modal */}
+      <Modal open={bookTripModal} onClose={() => setBookTripModal(false)}
+        title={`New trip — ${client.first_name} ${client.last_name}`} wide
+        footer={<>
+          <Button variant="secondary" onClick={() => setBookTripModal(false)}>Cancel</Button>
+          <Button onClick={saveTrip} disabled={saving || !tripForm.destination}>{saving?"Saving...":"Book trip"}</Button>
+        </>}>
+        <div className="bg-brand-50 rounded-lg px-3 py-2 text-sm text-brand-700 font-medium flex items-center gap-2">
+          <Globe size={13}/>Booking for {client.first_name} {client.last_name}
+        </div>
+        <Input label="Destination" {...bf("destination")} placeholder="Montego Bay, Jamaica" />
+        <div className="grid grid-cols-2 gap-3">
+          <Select label="Occasion" {...bf("occasion")}>{OCCASIONS.map(o=><option key={o}>{o}</option>)}</Select>
+          <Input label="Group name" {...bf("group_name")} placeholder="Girls Trip 2026..." />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Input label="Departure date" type="date" {...bf("departure_date")} />
+          <Input label="Return date"    type="date" {...bf("return_date")} />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Input label="Total price ($)" type="number" {...bf("total_price")}   placeholder="0.00" />
+          <Input label="Amount paid ($)" type="number" {...bf("amount_paid")}   placeholder="0.00" />
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          <Select label="Status" {...bf("status")}>{STATUSES.map(s=><option key={s}>{s}</option>)}</Select>
+          <Input label="Travelers"      type="number" {...bf("traveler_count")}    placeholder="1" />
+          <Input label="Confirmation #" {...bf("confirmation_number")} placeholder="ABC123" />
+        </div>
+        <Textarea label="Notes" {...bf("notes")} />
+      </Modal>
+
       {/* AI Email Composer */}
-      {showEmailAI && (
-        <AIEmailComposer
-          client={client}
-          trip={selectedTripForEmail}
-          onClose={() => setShowEmailAI(false)}
-        />
-      )}
+      <AIEmailComposer client={client} trip={selectedTrip} open={emailModal}
+        onClose={() => { setEmailModal(false); setSelectedTrip(null) }} />
 
       {/* AI Client Briefing */}
-      {showBriefing && (
-        <AIClientBriefing
-          client={client}
-          trips={trips}
-          tasks={tasks}
-          travelers={travelers}
-          loyalty={loyalty}
-          onClose={() => setShowBriefing(false)}
-        />
-      )}
+      <AIClientBriefing client={client} trips={trips} tasks={tasks} travelers={travelers} loyalty={loyalty}
+        open={briefingOpen} onClose={() => setBriefingOpen(false)} />
 
       {/* Add Traveler Modal */}
       <Modal open={travelerModal} onClose={() => setTravelerModal(false)} title="Add traveler" wide
         footer={<>
           <Button variant="secondary" onClick={() => setTravelerModal(false)}>Cancel</Button>
           <Button onClick={saveTraveler} disabled={saving || (!travelerForm.full_name && !travelerForm.existing_client_id)}>
-            {saving ? "Saving..." : "Add traveler"}
+            {saving?"Saving...":"Add traveler"}
           </Button>
         </>}>
-
-        {/* Option selector */}
         <div className="grid grid-cols-3 gap-2 p-1 bg-slate-100 rounded-xl">
-          {[
-            ["just_traveler", "Traveler only"],
-            ["existing_client", "Link existing client"],
-            ["new_client", "Create new client too"],
-          ].map(([val, label]) => (
-            <button key={val}
-              onClick={() => setTravelerForm(f => ({ ...f, link_as_client: val !== "just_traveler", existing_client_id: val !== "existing_client" ? "" : f.existing_client_id, _mode: val }))}
-              className={`py-2 px-2 rounded-lg text-xs font-medium transition-colors ${
-                (travelerForm._mode || "just_traveler") === val ? "bg-white text-brand-700 shadow-sm" : "text-slate-500 hover:text-slate-700"
-              }`}>
+          {[["just_traveler","Traveler only"],["existing_client","Link existing"],["new_client","Create new client"]].map(([val, label]) => (
+            <button key={val} onClick={() => setTravelerForm(f => ({ ...f, _mode: val, existing_client_id:"" }))}
+              className={`py-2 px-2 rounded-lg text-xs font-medium transition-colors ${travelerForm._mode===val?"bg-white text-brand-700 shadow-sm":"text-slate-500 hover:text-slate-700"}`}>
               {label}
             </button>
           ))}
         </div>
-
-        {(travelerForm._mode || "just_traveler") === "existing_client" ? (
+        {travelerForm._mode === "existing_client" ? (
           <>
-            <Select label="Select existing client" {...tf("existing_client_id")}>
-              <option value="">Choose a client...</option>
+            <Select label="Select client" {...tf("existing_client_id")}>
+              <option value="">Choose...</option>
               {allClients.map(c => <option key={c.id} value={c.id}>{c.first_name} {c.last_name}</option>)}
             </Select>
-            <Select label="Relationship" {...tf("relationship")}>
-              {RELATIONSHIPS.map(r => <option key={r}>{r}</option>)}
-            </Select>
+            <Select label="Relationship" {...tf("relationship")}>{RELATIONSHIPS.map(r=><option key={r}>{r}</option>)}</Select>
           </>
         ) : (
           <>
             <div className="grid grid-cols-2 gap-3">
               <Input label="Full name" {...tf("full_name")} placeholder="Jane Smith" className="col-span-2" />
-              <Select label="Relationship" {...tf("relationship")}>
-                {RELATIONSHIPS.map(r => <option key={r}>{r}</option>)}
-              </Select>
+              <Select label="Relationship" {...tf("relationship")}>{RELATIONSHIPS.map(r=><option key={r}>{r}</option>)}</Select>
               <Input label="Date of birth" type="date" {...tf("date_of_birth")} />
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <Input label="Passport number"  {...tf("passport_number")}  placeholder="A12345678" />
-              <Input label="Passport expiry"  type="date" {...tf("passport_expiry")} />
+              <Input label="Passport number" {...tf("passport_number")} placeholder="A12345678" />
+              <Input label="Passport expiry" type="date" {...tf("passport_expiry")} />
             </div>
-            <Textarea label="Notes" {...tf("notes")} placeholder="Any notes about this traveler..." />
-            {(travelerForm._mode || "just_traveler") === "new_client" && (
-              <p className="text-xs text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
-                A full client record will be created for this person so they can be managed independently as well.
-              </p>
+            <Textarea label="Notes" {...tf("notes")} />
+            {travelerForm._mode === "new_client" && (
+              <p className="text-xs text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">A full client record will also be created.</p>
             )}
           </>
         )}
       </Modal>
 
-      {/* Add Loyalty Number Modal */}
+      {/* Add Loyalty Modal */}
       <Modal open={loyaltyModal} onClose={() => setLoyaltyModal(false)} title="Add loyalty number"
         footer={<>
           <Button variant="secondary" onClick={() => setLoyaltyModal(false)}>Cancel</Button>
-          <Button onClick={saveLoyalty} disabled={saving || !loyaltyForm.number}>{saving ? "Saving..." : "Add"}</Button>
+          <Button onClick={saveLoyalty} disabled={saving || !loyaltyForm.number}>{saving?"Saving...":"Add"}</Button>
         </>}>
-        <Select label="Airline or cruise line" {...lf("airline_or_cruise")}>
-          {AIRLINES.map(a => <option key={a}>{a}</option>)}
-        </Select>
+        <Select label="Airline or cruise line" {...lf("airline_or_cruise")}>{AIRLINES.map(a=><option key={a}>{a}</option>)}</Select>
         <Input label="Loyalty number" {...lf("number")} placeholder="Member number..." />
         <Select label="Linked traveler (optional)" {...lf("traveler_id")}>
-          <option value="">Account-level — not traveler specific</option>
+          <option value="">Account-level</option>
           {travelers.map(t => <option key={t.id} value={t.id}>{t.full_name}</option>)}
         </Select>
       </Modal>

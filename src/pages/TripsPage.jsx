@@ -1,10 +1,10 @@
-import AITaskSuggestions from "../components/AITaskSuggestions"
 import { useEffect, useState, useRef } from "react"
 import { supabase } from "../lib/supabase"
+import { Link } from "react-router-dom"
 import { format, differenceInDays } from "date-fns"
-import { Globe, Plus, Search, Calendar, List, ChevronLeft, ChevronRight, X, Edit2, Trash2, Users, CheckSquare, Upload, FileText, Eye, EyeOff, Sparkles } from "lucide-react"
+import { Globe, Plus, Search, Calendar, List, ChevronLeft, ChevronRight, X, Edit2, Trash2, Users, CheckSquare, Upload, FileText, Eye, EyeOff } from "lucide-react"
 import { Card, PageHeader, Button, Input, Select, Textarea, Modal, EmptyState, Spinner, StatusBadge, OccasionBadge, Badge, StatsBar, InfoRow } from "../components/UI"
-import AIEmailComposer from "../components/AIEmailComposer"
+import AITaskSuggestions from "../components/AITaskSuggestions"
 import { startOfMonth, endOfMonth, eachDayOfInterval, isToday, parseISO, addMonths, subMonths } from "date-fns"
 
 const STATUSES  = ["Quoted","Confirmed","Paid","Departed","Completed","Cancelled"]
@@ -161,6 +161,23 @@ export default function TripsPage() {
   }
 
   const saveMember = async () => {
+    let clientId = memberForm.client_id || null
+    let travelerId = memberForm.traveler_id || null
+
+    // If adding a new client inline, create them first
+    if (memberForm._mode === "new" && memberForm._new_first) {
+      const { data: newClient } = await supabase.from("clients").insert({
+        first_name: memberForm._new_first,
+        last_name:  memberForm._new_last || "",
+        email:      memberForm._new_email || null,
+        phone:      memberForm._new_phone || null,
+        date_of_birth: memberForm._new_dob || null,
+        passport_number: memberForm._new_passport || null,
+      }).select().single()
+      if (newClient) { clientId = newClient.id; travelerId = null }
+    }
+
+    // Ensure group exists
     if (!detailTrip?.group_id) {
       const { data: grp } = await supabase.from("groups").insert({
         name: detailTrip.group_name || `${detailTrip.destination} Group`,
@@ -171,13 +188,24 @@ export default function TripsPage() {
         setDetailTrip(t => ({ ...t, group_id: grp.id }))
       }
     }
+
     const groupId = detailTrip.group_id || (await supabase.from("groups").select("id").eq("trip_id", detailTrip.id).single()).data?.id
     if (groupId) {
-      await supabase.from("group_members").insert({ ...memberForm, group_id: groupId, client_id: memberForm.client_id || null, traveler_id: memberForm.traveler_id || null, amount_owed: parseFloat(memberForm.amount_owed) || 0 })
+      await supabase.from("group_members").insert({
+        group_id: groupId,
+        client_id: clientId,
+        traveler_id: travelerId,
+        role: memberForm.role || "Member",
+        amount_owed: parseFloat(memberForm.amount_owed) || 0,
+        confirmation_number: memberForm.confirmation_number || null,
+        notes: memberForm.notes || null,
+        payment_status: "Pending",
+      })
     }
     setAddMemberModal(false)
-    setMemberForm({ client_id:"", traveler_id:"", role:"Member", amount_owed:"", confirmation_number:"", notes:"" })
+    setMemberForm({ client_id:"", traveler_id:"", role:"Member", amount_owed:"", confirmation_number:"", notes:"", _mode:"existing" })
     await loadDetail(detailTrip)
+    load() // refresh client list if new client was added
   }
 
   const removeMember = async (memberId) => {
@@ -351,9 +379,12 @@ export default function TripsPage() {
                   )}
                 </div>
               </div>
-              <div className="flex gap-1.5">
-                <button onClick={() => setShowAIEmail(true)} title="Draft email" className="p-1.5 rounded-lg bg-white/20 text-white hover:bg-white/30"><Sparkles size={13}/></button>
-                <button onClick={() => setShowAITasks(true)} title="AI task suggestions" className="p-1.5 rounded-lg bg-white/20 text-white hover:bg-white/30"><CheckSquare size={13}/></button>
+              <div className="flex gap-1.5 flex-wrap justify-end">
+                <Link to={`/trips/${detailTrip.id}/manifest`}>
+                  <button className="px-2.5 py-1.5 rounded-lg bg-white text-brand-700 text-xs font-semibold hover:bg-brand-50 transition-colors flex items-center gap-1">
+                    <Users size={11}/>Show details
+                  </button>
+                </Link>
                 <button onClick={() => openEdit(detailTrip)} className="p-1.5 rounded-lg bg-white/20 text-white hover:bg-white/30"><Edit2 size={13}/></button>
                 <button onClick={() => deleteTrip(detailTrip.id)} className="p-1.5 rounded-lg bg-white/20 text-white hover:bg-red-500/50"><Trash2 size={13}/></button>
                 <button onClick={() => setDetailTrip(null)} className="p-1.5 rounded-lg bg-white/20 text-white hover:bg-white/30"><X size={13}/></button>
@@ -552,26 +583,64 @@ export default function TripsPage() {
       )}
 
       {/* Add member modal */}
-      <Modal open={addMemberModal} onClose={() => setAddMemberModal(false)} title="Add traveler to trip"
+      <Modal open={addMemberModal} onClose={() => setAddMemberModal(false)} title="Add traveler to trip" wide
         footer={<>
           <Button variant="secondary" onClick={() => setAddMemberModal(false)}>Cancel</Button>
           <Button onClick={saveMember}>Add to trip</Button>
         </>}>
-        <Select label="Existing client" {...mf("client_id")} onChange={e => setMemberForm(f => ({ ...f, client_id: e.target.value, traveler_id: "" }))}>
-          <option value="">Select client...</option>
-          {clients.map(c => <option key={c.id} value={c.id}>{c.first_name} {c.last_name}</option>)}
-        </Select>
-        <div className="text-center text-xs text-slate-400">— or —</div>
-        <Select label="Known traveler" {...mf("traveler_id")} onChange={e => setMemberForm(f => ({ ...f, traveler_id: e.target.value, client_id: "" }))}>
-          <option value="">Select traveler...</option>
-          {allTravelers.map(t => <option key={t.id} value={t.id}>{t.full_name}</option>)}
-        </Select>
-        <div className="grid grid-cols-2 gap-3">
-          <Select label="Role" {...mf("role")}><option>Member</option><option>Lead</option><option>Guest</option></Select>
-          <Input label="Amount owed ($)" type="number" {...mf("amount_owed")} placeholder="0.00" />
+        <p className="text-xs text-slate-500 bg-slate-50 rounded-lg px-3 py-2">Select an existing client, a known traveler, or create a brand new client on the spot.</p>
+
+        {/* Mode selector */}
+        <div className="grid grid-cols-3 gap-2 p-1 bg-slate-100 rounded-xl">
+          {[["existing","Existing client"],["traveler","Known traveler"],["new","New client"]].map(([val,label]) => (
+            <button key={val}
+              onClick={() => setMemberForm(f => ({ ...f, _mode: val, client_id:"", traveler_id:"" }))}
+              className={`py-2 rounded-lg text-xs font-medium transition-colors ${(memberForm._mode||"existing")===val?"bg-white text-brand-700 shadow-sm":"text-slate-500 hover:text-slate-700"}`}>
+              {label}
+            </button>
+          ))}
         </div>
-        <Input label="Confirmation number" {...mf("confirmation_number")} placeholder="Individual conf #" />
-        <Textarea label="Notes" {...mf("notes")} />
+
+        {(memberForm._mode||"existing") === "existing" && (
+          <Select label="Select client" value={memberForm.client_id} onChange={e => setMemberForm(f => ({ ...f, client_id: e.target.value }))}>
+            <option value="">Choose a client...</option>
+            {clients.map(c => <option key={c.id} value={c.id}>{c.first_name} {c.last_name}</option>)}
+          </Select>
+        )}
+
+        {memberForm._mode === "traveler" && (
+          <Select label="Select traveler" value={memberForm.traveler_id} onChange={e => setMemberForm(f => ({ ...f, traveler_id: e.target.value }))}>
+            <option value="">Choose a traveler...</option>
+            {allTravelers.map(t => <option key={t.id} value={t.id}>{t.full_name}</option>)}
+          </Select>
+        )}
+
+        {memberForm._mode === "new" && (
+          <>
+            <p className="text-xs text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">A full client record will be created for this person and they'll be added to the trip.</p>
+            <div className="grid grid-cols-2 gap-3">
+              <Input label="First name" value={memberForm._new_first||""} onChange={e => setMemberForm(f=>({...f,_new_first:e.target.value}))} placeholder="Jane" />
+              <Input label="Last name"  value={memberForm._new_last||""}  onChange={e => setMemberForm(f=>({...f,_new_last:e.target.value}))}  placeholder="Smith" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Input label="Email" type="email" value={memberForm._new_email||""} onChange={e => setMemberForm(f=>({...f,_new_email:e.target.value}))} placeholder="jane@email.com" />
+              <Input label="Phone" value={memberForm._new_phone||""} onChange={e => setMemberForm(f=>({...f,_new_phone:e.target.value}))} placeholder="+1 555 000 0000" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Input label="Date of birth" type="date" value={memberForm._new_dob||""} onChange={e => setMemberForm(f=>({...f,_new_dob:e.target.value}))} />
+              <Input label="Passport #" value={memberForm._new_passport||""} onChange={e => setMemberForm(f=>({...f,_new_passport:e.target.value}))} placeholder="A12345678" />
+            </div>
+          </>
+        )}
+
+        <div className="grid grid-cols-2 gap-3">
+          <Select label="Role" value={memberForm.role} onChange={e=>setMemberForm(f=>({...f,role:e.target.value}))}>
+            <option>Member</option><option>Lead</option><option>Guest</option>
+          </Select>
+          <Input label="Amount owed ($)" type="number" value={memberForm.amount_owed||""} onChange={e=>setMemberForm(f=>({...f,amount_owed:e.target.value}))} placeholder="0.00" />
+        </div>
+        <Input label="Confirmation number" value={memberForm.confirmation_number||""} onChange={e=>setMemberForm(f=>({...f,confirmation_number:e.target.value}))} placeholder="Individual conf #" />
+        <Textarea label="Notes" value={memberForm.notes||""} onChange={e=>setMemberForm(f=>({...f,notes:e.target.value}))} />
       </Modal>
 
       {/* Add/Edit trip modal */}
