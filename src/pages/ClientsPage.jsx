@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import { supabase } from "../lib/supabase"
-import { Link, useNavigate } from "react-router-dom"
-import { Users, Search, Plus, Phone, Mail, AlertTriangle, Filter, Globe } from "lucide-react"
+import { useNavigate } from "react-router-dom"
+import { Users, Search, Plus, Phone, Mail, AlertTriangle, Filter, Globe, ChevronDown, ChevronRight, List, GitBranch } from "lucide-react"
 import { differenceInDays } from "date-fns"
 import { Card, PageHeader, Button, Input, Select, Textarea, Modal, EmptyState, Spinner, StatsBar, MissingDot } from "../components/UI"
 
@@ -24,24 +24,29 @@ const CARS       = ["","Economy","Compact","Midsize","SUV","Luxury","No preferen
 const BUDGETS    = ["","Under $1,000","$1,000 – $3,000","$3,000 – $5,000","$5,000 – $10,000","$10,000+"]
 
 function getMissingFields(client) {
-  const critical = []
-  if (!client.email)                  critical.push("email")
-  if (!client.phone)                  critical.push("phone")
-  if (!client.passport_number)        critical.push("passport #")
-  if (!client.passport_expiry)        critical.push("passport expiry")
-  if (!client.date_of_birth)          critical.push("DOB")
-  if (!client.emergency_contact_name) critical.push("emergency contact")
-  return critical
+  const m = []
+  if (!client.email)                  m.push("email")
+  if (!client.phone)                  m.push("phone")
+  if (!client.passport_number)        m.push("passport #")
+  if (!client.passport_expiry)        m.push("passport expiry")
+  if (!client.date_of_birth)          m.push("DOB")
+  if (!client.emergency_contact_name) m.push("emergency contact")
+  return m
 }
 
 export default function ClientsPage() {
   const navigate = useNavigate()
   const [clients, setClients]     = useState([])
   const [trips, setTrips]         = useState([])
+  const [travelers, setTravelers] = useState([])
+  const [groups, setGroups]       = useState([])
+  const [members, setMembers]     = useState([])
   const [search, setSearch]       = useState("")
   const [destFilter, setDest]     = useState("")
   const [depFilter, setDep]       = useState("")
   const [showFilters, setFilters] = useState(false)
+  const [viewMode, setViewMode]   = useState("list") // "list" | "tree"
+  const [expandedGroups, setExpanded] = useState({})
   const [loading, setLoading]     = useState(true)
   const [modal, setModal]         = useState(false)
   const [editing, setEditing]     = useState(null)
@@ -50,12 +55,18 @@ export default function ClientsPage() {
   const [tab, setTab]             = useState("basic")
 
   const load = async () => {
-    const [{ data: c }, { data: t }] = await Promise.all([
-      supabase.from("clients").select("*").order("last_name"),
-      supabase.from("trips").select("client_id,destination,departure_date,status").neq("status","Cancelled"),
+    const [{ data: c }, { data: t }, { data: tv }, { data: g }, { data: gm }] = await Promise.all([
+      supabase.from("clients").select("*").order("last_name").order("first_name"),
+      supabase.from("trips").select("client_id,destination,departure_date,status,id,group_id,group_name").neq("status","Cancelled"),
+      supabase.from("travelers").select("*").order("full_name"),
+      supabase.from("groups").select("*, trips(destination,departure_date)").eq("status","Active"),
+      supabase.from("group_members").select("*, clients(id,first_name,last_name)").eq("removed",false),
     ])
     setClients(c || [])
     setTrips(t || [])
+    setTravelers(tv || [])
+    setGroups(g || [])
+    setMembers(gm || [])
     setLoading(false)
   }
 
@@ -71,9 +82,7 @@ export default function ClientsPage() {
     } else {
       await supabase.from("clients").insert(form)
     }
-    setSaving(false)
-    setModal(false)
-    load()
+    setSaving(false); setModal(false); load()
   }
 
   const deleteClient = async (e, id) => {
@@ -83,7 +92,7 @@ export default function ClientsPage() {
     load()
   }
 
-  const field = (k) => ({ value: form[k] || "", onChange: e => setForm(f => ({ ...f, [k]: e.target.value })) })
+  const field = (k) => ({ value: form[k]??false===form[k]?form[k]:form[k]||"", onChange: e => setForm(f => ({ ...f, [k]: e.target.value })) })
 
   const clientTripsMap = {}
   trips.forEach(t => {
@@ -94,16 +103,40 @@ export default function ClientsPage() {
   const destinations = [...new Set(trips.map(t => t.destination).filter(Boolean))].sort()
 
   const filtered = clients.filter(c => {
-    const matchSearch = `${c.first_name} ${c.last_name} ${c.email||""} ${c.phone||""}`.toLowerCase().includes(search.toLowerCase())
+    const ms = `${c.first_name} ${c.last_name} ${c.email||""} ${c.phone||""}`.toLowerCase().includes(search.toLowerCase())
     const cTrips = clientTripsMap[c.id] || []
     const matchDest = !destFilter || cTrips.some(t => t.destination?.toLowerCase().includes(destFilter.toLowerCase()))
     let matchDep = true
-    if (depFilter === "30")     matchDep = cTrips.some(t => t.departure_date && differenceInDays(new Date(t.departure_date), new Date()) <= 30  && differenceInDays(new Date(t.departure_date), new Date()) >= 0)
+    if (depFilter === "30")      matchDep = cTrips.some(t => t.departure_date && differenceInDays(new Date(t.departure_date), new Date()) <= 30  && differenceInDays(new Date(t.departure_date), new Date()) >= 0)
     else if (depFilter === "90") matchDep = cTrips.some(t => t.departure_date && differenceInDays(new Date(t.departure_date), new Date()) <= 90  && differenceInDays(new Date(t.departure_date), new Date()) >= 0)
     else if (depFilter === "past")   matchDep = cTrips.some(t => t.departure_date && new Date(t.departure_date) < new Date())
     else if (depFilter === "future") matchDep = cTrips.some(t => t.departure_date && new Date(t.departure_date) >= new Date())
-    return matchSearch && matchDest && matchDep
+    return ms && matchDest && matchDep
   })
+
+  // Build group tree
+  const groupTree = groups.map(g => {
+    const leadClient = clients.find(c => c.id === g.lead_client_id)
+    const groupMembers = members
+      .filter(m => m.group_id === g.id)
+      .map(m => m.clients)
+      .filter(Boolean)
+    return { ...g, leadClient, groupMembers }
+  })
+
+  // Also include clients with travelers but no formal group
+  const clientsWithTravelers = clients.filter(c => {
+    const hasTravelers = travelers.filter(t => t.client_id === c.id).length > 1
+    const inGroup = groups.some(g => g.lead_client_id === c.id)
+    return hasTravelers && !inGroup
+  }).map(c => ({
+    id: `traveler_${c.id}`,
+    name: `${c.first_name} ${c.last_name}`,
+    leadClient: c,
+    groupMembers: [],
+    travelers: travelers.filter(t => t.client_id === c.id && t.relationship !== 'Self'),
+    trips: { destination: clientTripsMap[c.id]?.[0]?.destination }
+  }))
 
   const totalMissing = clients.filter(c => getMissingFields(c).length > 0).length
   const withTrips    = Object.keys(clientTripsMap).length
@@ -115,21 +148,18 @@ export default function ClientsPage() {
     <div className="p-6 max-w-5xl mx-auto">
       <PageHeader
         title="Clients"
-        subtitle={`${clients.length} total clients`}
-        action={
-          <Button onClick={openNew} size="lg">
-            <Plus size={16}/>Add client
-          </Button>
-        }
+        subtitle={`${clients.length} total clients — sorted A–Z`}
+        action={<Button onClick={openNew} size="lg"><Plus size={16}/>Add client</Button>}
       />
 
       <StatsBar stats={[
-        { label: "Total clients",       value: clients.length,  color: "pink"  },
-        { label: "With active trips",   value: withTrips,       color: "green" },
-        { label: "Active bookings",     value: activeTrips,     color: "blue"  },
-        { label: "Incomplete profiles", value: totalMissing,    color: "amber" },
+        { label:"Total clients",       value: clients.length,  color:"pink"  },
+        { label:"With active trips",   value: withTrips,       color:"green" },
+        { label:"Active bookings",     value: activeTrips,     color:"blue"  },
+        { label:"Incomplete profiles", value: totalMissing,    color:"amber" },
       ]} />
 
+      {/* Search + filters + view toggle */}
       <div className="space-y-2 mb-5">
         <div className="flex gap-2">
           <div className="relative flex-1">
@@ -141,7 +171,21 @@ export default function ClientsPage() {
           <Button variant="secondary" onClick={() => setFilters(f => !f)}>
             <Filter size={14}/>Filters {(destFilter||depFilter) ? "•" : ""}
           </Button>
+          {/* View toggle */}
+          <div className="flex rounded-xl border border-slate-200 overflow-hidden bg-white">
+            <button onClick={() => setViewMode("list")}
+              className={`px-3 py-2 flex items-center gap-1.5 text-sm transition-colors ${viewMode==="list"?"text-white":"text-slate-500 hover:bg-brand-50"}`}
+              style={viewMode==="list"?{background:"#8B1A4A"}:{}}>
+              <List size={14}/>List
+            </button>
+            <button onClick={() => setViewMode("tree")}
+              className={`px-3 py-2 flex items-center gap-1.5 text-sm transition-colors ${viewMode==="tree"?"text-white":"text-slate-500 hover:bg-brand-50"}`}
+              style={viewMode==="tree"?{background:"#8B1A4A"}:{}}>
+              <GitBranch size={14}/>Groups
+            </button>
+          </div>
         </div>
+
         {showFilters && (
           <div className="flex gap-3 p-3 bg-brand-50 rounded-xl border border-brand-100">
             <div className="flex-1">
@@ -170,69 +214,186 @@ export default function ClientsPage() {
         )}
       </div>
 
-      {filtered.length === 0
-        ? <EmptyState icon={Users} title="No clients found"
-            action={<Button onClick={openNew} size="lg"><Plus size={16}/>Add first client</Button>} />
-        : (
-          <Card>
-            <div className="divide-y divide-slate-50">
-              {filtered.map(c => {
-                const missing  = getMissingFields(c)
-                const cTrips   = clientTripsMap[c.id] || []
-                const nextTrip = cTrips.find(t => t.departure_date && new Date(t.departure_date) >= new Date())
-                const passWarn = c.passport_expiry ? differenceInDays(new Date(c.passport_expiry), new Date()) : null
+      {/* ── LIST VIEW ── */}
+      {viewMode === "list" && (
+        filtered.length === 0
+          ? <EmptyState icon={Users} title="No clients found"
+              action={<Button onClick={openNew} size="lg"><Plus size={16}/>Add first client</Button>} />
+          : (
+            <Card>
+              <div className="divide-y divide-slate-50">
+                {filtered.map(c => {
+                  const missing  = getMissingFields(c)
+                  const cTrips   = clientTripsMap[c.id] || []
+                  const nextTrip = cTrips.find(t => t.departure_date && new Date(t.departure_date) >= new Date())
+                  const passWarn = c.passport_expiry ? differenceInDays(new Date(c.passport_expiry), new Date()) : null
 
-                return (
-                  <div key={c.id}
-                    onClick={() => navigate(`/clients/${c.id}`)}
-                    className="flex items-center gap-4 px-4 py-4 hover:bg-brand-50 transition-colors cursor-pointer group">
-                    <div className="w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-bold flex-shrink-0" style={{background:"#8B1A4A"}}>
-                      {c.first_name?.[0]}{c.last_name?.[0]}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <p className="text-base font-semibold text-slate-800 group-hover:text-brand-600 transition-colors">
-                          {c.first_name} {c.last_name}
-                        </p>
-                        {missing.length > 0 && <MissingDot tooltip={`Missing: ${missing.join(", ")}`} />}
-                        {passWarn !== null && passWarn < 180 && (
-                          <span className="flex items-center gap-1 text-xs text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">
-                            <AlertTriangle size={9}/>{passWarn < 0 ? "Passport expired" : `Passport expires ${passWarn}d`}
-                          </span>
-                        )}
+                  return (
+                    <div key={c.id} onClick={() => navigate(`/clients/${c.id}`)}
+                      className="flex items-center gap-4 px-4 py-4 hover:bg-brand-50 transition-colors cursor-pointer group">
+                      <div className="w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-bold flex-shrink-0" style={{background:"#8B1A4A"}}>
+                        {c.first_name?.[0]}{c.last_name?.[0]}
                       </div>
-                      <div className="flex items-center gap-4 mt-1 flex-wrap">
-                        {c.email && (
-                          <a href={`mailto:${c.email}`} onClick={e => e.stopPropagation()}
-                            className="flex items-center gap-1.5 text-sm text-brand-600 hover:text-brand-800 font-medium transition-colors">
-                            <Mail size={13}/>{c.email}
-                          </a>
-                        )}
-                        {c.phone && (
-                          <a href={`tel:${c.phone}`} onClick={e => e.stopPropagation()}
-                            className="flex items-center gap-1.5 text-sm text-brand-600 hover:text-brand-800 font-medium transition-colors">
-                            <Phone size={13}/>{c.phone}
-                          </a>
-                        )}
-                        {c.home_airport && <span className="text-xs text-brand-400 font-medium bg-brand-50 px-2 py-0.5 rounded-full">{c.home_airport}</span>}
-                        {nextTrip && <span className="text-xs text-green-600 font-medium">Next: {nextTrip.destination}</span>}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="text-base font-semibold text-slate-800 group-hover:text-brand-600 transition-colors">
+                            {c.first_name} {c.last_name}
+                          </p>
+                          {missing.length > 0 && <MissingDot tooltip={`Missing: ${missing.join(", ")}`} />}
+                          {c.is_minor && <span className="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full font-medium">Minor</span>}
+                          {c.referral_source === "Vacation Package" && <span className="text-xs bg-teal-100 text-teal-700 px-1.5 py-0.5 rounded-full font-medium">Vacation Pkg</span>}
+                          {passWarn !== null && passWarn < 180 && (
+                            <span className="flex items-center gap-1 text-xs text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">
+                              <AlertTriangle size={9}/>{passWarn < 0 ? "Passport expired" : `Passport expires ${passWarn}d`}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-4 mt-1 flex-wrap">
+                          {c.email && (
+                            <a href={`mailto:${c.email}`} onClick={e => e.stopPropagation()}
+                              className="flex items-center gap-1.5 text-sm text-brand-600 hover:text-brand-800 font-medium transition-colors">
+                              <Mail size={13}/>{c.email}
+                            </a>
+                          )}
+                          {c.phone && (
+                            <a href={`tel:${c.phone}`} onClick={e => e.stopPropagation()}
+                              className="flex items-center gap-1.5 text-sm text-brand-600 hover:text-brand-800 font-medium transition-colors">
+                              <Phone size={13}/>{c.phone}
+                            </a>
+                          )}
+                          {c.home_airport && <span className="text-xs text-brand-400 font-medium bg-brand-50 px-2 py-0.5 rounded-full">{c.home_airport}</span>}
+                          {nextTrip && <span className="text-xs text-green-600 font-medium">Next: {nextTrip.destination}</span>}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 flex-shrink-0" onClick={e => e.stopPropagation()}>
+                        <span className="text-xs text-slate-400">{cTrips.length} trip{cTrips.length!==1?"s":""}</span>
+                        <Button variant="ghost" size="sm" onClick={e => openEdit(e, c)}>Edit</Button>
+                        <Button variant="ghost" size="sm" className="text-red-400 hover:bg-red-50" onClick={e => deleteClient(e, c.id)}>Delete</Button>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2 flex-shrink-0" onClick={e => e.stopPropagation()}>
-                      <span className="text-xs text-slate-400">{cTrips.length} trip{cTrips.length!==1?"s":""}</span>
-                      <Button variant="pink" size="sm" onClick={() => navigate(`/trips?client=${c.id}`)}>
-                        <Globe size={12}/>Book trip
-                      </Button>
-                      <Button variant="ghost" size="sm" onClick={e => openEdit(e, c)}>Edit</Button>
-                      <Button variant="ghost" size="sm" className="text-red-400 hover:bg-red-50" onClick={e => deleteClient(e, c.id)}>Delete</Button>
+                  )
+                })}
+              </div>
+            </Card>
+          )
+      )}
+
+      {/* ── TREE / GROUP VIEW ── */}
+      {viewMode === "tree" && (
+        <div className="space-y-3">
+          <p className="text-xs text-slate-400 bg-slate-50 rounded-lg px-3 py-2">
+            Showing {groupTree.length + clientsWithTravelers.length} groups and travel families. A client may appear in multiple groups.
+          </p>
+
+          {/* Formal groups (from trips) */}
+          {groupTree.map(g => {
+            const isOpen = expandedGroups[g.id] !== false // default open
+            return (
+              <Card key={g.id} className="overflow-hidden">
+                <div className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-brand-50 transition-colors"
+                  onClick={() => setExpanded(e => ({ ...e, [g.id]: !isOpen }))}>
+                  <button className="text-brand-400 flex-shrink-0">
+                    {isOpen ? <ChevronDown size={16}/> : <ChevronRight size={16}/>}
+                  </button>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <Globe size={13} className="text-brand-400"/>
+                      <p className="text-sm font-semibold text-slate-800">{g.name}</p>
+                      <span className="text-xs bg-brand-100 text-brand-600 px-1.5 py-0.5 rounded-full">
+                        {g.groupMembers.length + 1} travelers
+                      </span>
                     </div>
+                    {g.trips && <p className="text-xs text-slate-400 ml-5">{g.trips.destination}</p>}
                   </div>
-                )
-              })}
-            </div>
-          </Card>
-        )
-      }
+                  {g.leadClient && (
+                    <span className="text-xs text-slate-400 flex-shrink-0">
+                      Lead: {g.leadClient.first_name} {g.leadClient.last_name}
+                    </span>
+                  )}
+                </div>
+                {isOpen && (
+                  <div className="border-t border-slate-100">
+                    {/* Lead client */}
+                    {g.leadClient && (
+                      <div onClick={() => navigate(`/clients/${g.leadClient.id}`)}
+                        className="flex items-center gap-3 px-6 py-2.5 hover:bg-brand-50 transition-colors cursor-pointer border-b border-slate-50">
+                        <div className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0" style={{background:"#8B1A4A"}}>
+                          {g.leadClient.first_name?.[0]}{g.leadClient.last_name?.[0]}
+                        </div>
+                        <div className="flex-1">
+                          <p className="text-sm font-medium text-slate-800">{g.leadClient.first_name} {g.leadClient.last_name}</p>
+                          {g.leadClient.email && <p className="text-xs text-slate-400">{g.leadClient.email}</p>}
+                        </div>
+                        <span className="text-xs bg-brand-100 text-brand-600 px-1.5 py-0.5 rounded-full font-medium">Lead</span>
+                      </div>
+                    )}
+                    {/* Group members */}
+                    {g.groupMembers.map((m, i) => m && (
+                      <div key={i} onClick={() => navigate(`/clients/${m.id}`)}
+                        className="flex items-center gap-3 px-6 py-2.5 hover:bg-slate-50 transition-colors cursor-pointer border-b border-slate-50 last:border-0">
+                        <div className="w-7 h-7 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 text-xs font-bold flex-shrink-0">
+                          {m.first_name?.[0]}{m.last_name?.[0]}
+                        </div>
+                        <p className="text-sm text-slate-700 flex-1">{m.first_name} {m.last_name}</p>
+                        <span className="text-xs text-slate-400">Member</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Card>
+            )
+          })}
+
+          {/* Client-traveler families (no formal group yet) */}
+          {clientsWithTravelers.map(g => {
+            const isOpen = expandedGroups[g.id] !== false
+            return (
+              <Card key={g.id} className="overflow-hidden">
+                <div className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-brand-50 transition-colors"
+                  onClick={() => setExpanded(e => ({ ...e, [g.id]: !isOpen }))}>
+                  <button className="text-brand-400 flex-shrink-0">
+                    {isOpen ? <ChevronDown size={16}/> : <ChevronRight size={16}/>}
+                  </button>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <Users size={13} className="text-brand-400"/>
+                      <p className="text-sm font-semibold text-slate-800">{g.name}</p>
+                      <span className="text-xs bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded-full">
+                        {g.travelers.length + 1} travelers
+                      </span>
+                    </div>
+                    {g.trips?.destination && <p className="text-xs text-slate-400 ml-5">{g.trips.destination}</p>}
+                  </div>
+                </div>
+                {isOpen && (
+                  <div className="border-t border-slate-100">
+                    <div onClick={() => navigate(`/clients/${g.leadClient.id}`)}
+                      className="flex items-center gap-3 px-6 py-2.5 hover:bg-brand-50 transition-colors cursor-pointer border-b border-slate-50">
+                      <div className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0" style={{background:"#8B1A4A"}}>
+                        {g.leadClient.first_name?.[0]}{g.leadClient.last_name?.[0]}
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-sm font-medium text-slate-800">{g.leadClient.first_name} {g.leadClient.last_name}</p>
+                        {g.leadClient.email && <p className="text-xs text-slate-400">{g.leadClient.email}</p>}
+                      </div>
+                      <span className="text-xs bg-brand-100 text-brand-600 px-1.5 py-0.5 rounded-full font-medium">Lead</span>
+                    </div>
+                    {g.travelers.map((tv, i) => (
+                      <div key={i} className="flex items-center gap-3 px-6 py-2.5 border-b border-slate-50 last:border-0">
+                        <div className="w-7 h-7 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 text-xs font-bold flex-shrink-0">
+                          {tv.full_name?.[0]}
+                        </div>
+                        <p className="text-sm text-slate-700 flex-1">{tv.full_name}</p>
+                        <span className="text-xs text-slate-400">{tv.relationship}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Card>
+            )
+          })}
+        </div>
+      )}
 
       {/* Add/Edit Modal */}
       <Modal open={modal} onClose={() => setModal(false)}
