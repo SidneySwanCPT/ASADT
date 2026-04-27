@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react"
-import { LifeBuoy, CheckCircle2, AlertTriangle, Inbox } from "lucide-react"
+import { useEffect, useRef, useState } from "react"
+import { LifeBuoy, CheckCircle2, AlertTriangle, Inbox, Bell } from "lucide-react"
 import { format } from "date-fns"
 import { useAuth } from "../context/AuthContext"
 import { supabase } from "../lib/supabase"
@@ -300,6 +300,44 @@ export default function TicketPage() {
 function TicketCard({ ticket }) {
   const isResolved = RESOLVED_STATUSES.has(ticket.status)
   const resolvedAt = ticket.resolved_at ? fmtDate(ticket.resolved_at) : null
+  const canRemind  = ticket.status === "Open" || ticket.status === "In Progress"
+
+  const [reminding, setReminding]   = useState(false)
+  const [reminded, setReminded]     = useState(false)
+  const [reminderError, setReminderError] = useState("")
+  const timerRef = useRef(null)
+
+  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current) }, [])
+
+  const sendReminder = async () => {
+    setReminding(true)
+    setReminderError("")
+    try {
+      const resp = await fetch("/.netlify/functions/submit-ticket", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reminder:           true,
+          ticket_id:          ticket.id,
+          subject:            ticket.subject,
+          category:           ticket.category,
+          priority:           ticket.priority,
+          description:        ticket.description,
+          submitted_by_name:  ticket.submitted_by_name,
+          submitted_by_email: ticket.submitted_by_email,
+        }),
+      })
+      const data = await resp.json().catch(() => ({}))
+      if (!resp.ok) throw new Error(data.error || `Request failed (${resp.status})`)
+      setReminded(true)
+      timerRef.current = setTimeout(() => setReminded(false), 3000)
+    } catch (err) {
+      setReminderError(err.message || "Failed to send reminder.")
+      timerRef.current = setTimeout(() => setReminderError(""), 4000)
+    } finally {
+      setReminding(false)
+    }
+  }
 
   return (
     <Card>
@@ -345,6 +383,33 @@ function TicketCard({ ticket }) {
           <div className="mt-3 p-3 bg-blue-50 border border-blue-100 rounded-lg">
             <p className="text-xs font-semibold text-blue-700 uppercase tracking-wide mb-1">Admin notes</p>
             <p className="text-xs text-blue-900 whitespace-pre-wrap leading-relaxed">{ticket.admin_notes}</p>
+          </div>
+        )}
+
+        {canRemind && (
+          <div className="mt-3 flex items-center gap-2">
+            <Button size="sm" variant="secondary" onClick={sendReminder} disabled={reminding}>
+              {reminding ? (
+                <>
+                  <span className="w-3 h-3 border-2 border-brand-200 border-t-brand-500 rounded-full animate-spin" />
+                  Sending…
+                </>
+              ) : (
+                <>
+                  <Bell size={12} />
+                  Send reminder
+                </>
+              )}
+            </Button>
+            {reminded && (
+              <span className="text-xs text-green-600 font-medium flex items-center gap-1">
+                <CheckCircle2 size={12} />
+                Reminder sent!
+              </span>
+            )}
+            {reminderError && (
+              <span className="text-xs text-red-600 font-medium">{reminderError}</span>
+            )}
           </div>
         )}
       </div>
