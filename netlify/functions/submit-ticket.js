@@ -1,3 +1,14 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// Required Netlify environment variables:
+//   RESEND_API_KEY              — from Resend → API Keys
+//   VITE_SUPABASE_URL           — same URL the frontend uses
+//   SUPABASE_SERVICE_ROLE_KEY   — Supabase → Project Settings → API → service_role
+//                                 (NOT the anon key — this bypasses RLS, never expose
+//                                  it to the browser; only used in this serverless fn)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const { createClient } = require("@supabase/supabase-js")
+
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "Content-Type",
@@ -19,39 +30,63 @@ const PRIORITY_COLOR = {
   Low:    "#64748b",
 }
 
+const json = (statusCode, body) => ({
+  statusCode,
+  headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+  body: JSON.stringify(body),
+})
+
 exports.handler = async (event) => {
   if (event.httpMethod === "OPTIONS") {
     return { statusCode: 204, headers: CORS_HEADERS, body: "" }
   }
   if (event.httpMethod !== "POST") {
-    return {
-      statusCode: 405,
-      headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
-      body: JSON.stringify({ error: "Method not allowed" }),
-    }
+    return json(405, { error: "Method not allowed" })
   }
 
   try {
-    const { name, email, subject, category, priority, description } = JSON.parse(event.body || "{}")
+    const body = JSON.parse(event.body || "{}")
+    const { name, email, subject, category, priority, description, user_id } = body
 
     if (!name || !email || !subject || !category || !priority || !description) {
-      return {
-        statusCode: 400,
-        headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
-        body: JSON.stringify({ error: "Missing required fields" }),
-      }
+      return json(400, { error: "Missing required fields" })
     }
 
-    const apiKey = process.env.RESEND_API_KEY
-    if (!apiKey) {
-      return {
-        statusCode: 500,
-        headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
-        body: JSON.stringify({ error: "Email service not configured" }),
-      }
+    const supabaseUrl = process.env.VITE_SUPABASE_URL
+    const serviceKey  = process.env.SUPABASE_SERVICE_ROLE_KEY
+    const resendKey   = process.env.RESEND_API_KEY
+
+    if (!supabaseUrl || !serviceKey) {
+      return json(500, { error: "Supabase not configured" })
+    }
+    if (!resendKey) {
+      return json(500, { error: "Email service not configured" })
     }
 
-    const timestamp = new Date().toISOString()
+    const supabase = createClient(supabaseUrl, serviceKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    })
+
+    const { data: ticket, error: insertError } = await supabase
+      .from("tickets")
+      .insert({
+        submitted_by_name:  name,
+        submitted_by_email: email,
+        user_id:            user_id || null,
+        category,
+        priority,
+        subject,
+        description,
+        status:             "Open",
+      })
+      .select()
+      .single()
+
+    if (insertError) {
+      return json(500, { error: "Failed to save ticket", detail: insertError.message })
+    }
+
+    const timestamp = ticket.created_at || new Date().toISOString()
     const priColor = PRIORITY_COLOR[priority] || "#64748b"
 
     const html = `<!DOCTYPE html>
@@ -62,6 +97,7 @@ exports.handler = async (event) => {
         <td style="background:#8B1A4A;padding:20px 24px;color:#ffffff;">
           <div style="font-size:12px;letter-spacing:.12em;text-transform:uppercase;opacity:.85;">ASA Destination Travel</div>
           <div style="font-size:18px;font-weight:600;margin-top:4px;">New IT Support Ticket</div>
+          <div style="font-size:12px;opacity:.85;margin-top:4px;">Ticket #${escapeHtml(ticket.id)}</div>
         </td>
       </tr>
       <tr>
@@ -89,6 +125,10 @@ exports.handler = async (event) => {
               <td style="padding:8px 0;border-bottom:1px solid #f1f5f9;font-size:14px;color:#0f172a;">${escapeHtml(priority)}</td>
             </tr>
             <tr>
+              <td style="padding:8px 0;border-bottom:1px solid #f1f5f9;font-size:12px;color:#94a3b8;text-transform:uppercase;letter-spacing:.06em;">Ticket ID</td>
+              <td style="padding:8px 0;border-bottom:1px solid #f1f5f9;font-size:14px;color:#0f172a;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${escapeHtml(ticket.id)}</td>
+            </tr>
+            <tr>
               <td style="padding:8px 0;font-size:12px;color:#94a3b8;text-transform:uppercase;letter-spacing:.06em;">Submitted</td>
               <td style="padding:8px 0;font-size:14px;color:#0f172a;">${escapeHtml(timestamp)}</td>
             </tr>
@@ -105,6 +145,7 @@ exports.handler = async (event) => {
 
     const text = `New IT Support Ticket
 ---------------------
+Ticket ID:   ${ticket.id}
 From:        ${name} <${email}>
 Category:    ${category}
 Priority:    ${priority}
@@ -118,7 +159,7 @@ ${description}
     const resp = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${apiKey}`,
+        "Authorization": `Bearer ${resendKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -133,23 +174,13 @@ ${description}
 
     if (!resp.ok) {
       const detail = await resp.text()
-      return {
-        statusCode: 500,
-        headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
-        body: JSON.stringify({ error: "Failed to send email", detail }),
-      }
+      // Ticket is already saved; report email failure but include the id so the UI
+      // can still confirm the ticket was created.
+      return json(500, { error: "Ticket saved but email failed", detail, ticket_id: ticket.id })
     }
 
-    return {
-      statusCode: 200,
-      headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
-      body: JSON.stringify({ success: true, timestamp }),
-    }
+    return json(200, { success: true, ticket_id: ticket.id, timestamp })
   } catch (err) {
-    return {
-      statusCode: 500,
-      headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
-      body: JSON.stringify({ error: err.message || "Unknown error" }),
-    }
+    return json(500, { error: err.message || "Unknown error" })
   }
 }
