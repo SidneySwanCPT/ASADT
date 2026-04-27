@@ -1,6 +1,6 @@
 import { NavLink, useNavigate } from "react-router-dom"
 import { useAuth } from "../context/AuthContext"
-import { LayoutDashboard, Users, Globe, CheckSquare, Bell, Building2, LogOut } from "lucide-react"
+import { LayoutDashboard, Users, Globe, CheckSquare, Bell, Building2, LifeBuoy, LogOut } from "lucide-react"
 import GlobalSearch from "./GlobalSearch"
 
 const navItems = [
@@ -9,6 +9,7 @@ const navItems = [
   { to: "/trips",     icon: Globe,           label: "Trips"      },
   { to: "/tasks",     icon: CheckSquare,     label: "Tasks"      },
   { to: "/reminders", icon: Bell,            label: "Reminders"  },
+  { to: "/tickets",   icon: LifeBuoy,        label: "IT Support" },
   { to: "/suppliers", icon: Building2,       label: "Suppliers"  },
 ]
 

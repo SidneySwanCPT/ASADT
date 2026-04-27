@@ -10,6 +10,7 @@ import TripManifest from "./pages/TripManifest"
 import TasksPage from "./pages/TasksPage"
 import RemindersPage from "./pages/RemindersPage"
 import SuppliersPage from "./pages/SuppliersPage"
+import TicketPage from "./pages/TicketPage"
 
 function ProtectedRoute({ children }) {
   const { session, loading } = useAuth()
@@ -36,6 +37,7 @@ function AppRoutes() {
       <Route path="/tasks"                   element={<ProtectedRoute><TasksPage /></ProtectedRoute>} />
       <Route path="/reminders"               element={<ProtectedRoute><RemindersPage /></ProtectedRoute>} />
       <Route path="/suppliers"               element={<ProtectedRoute><SuppliersPage /></ProtectedRoute>} />
+      <Route path="/tickets"                 element={<ProtectedRoute><TicketPage /></ProtectedRoute>} />
       <Route path="*"                        element={<Navigate to="/" replace />} />
     </Routes>
   )
