@@ -38,30 +38,49 @@ export default function TicketPage() {
 
   const [tickets, setTickets] = useState([])
   const [loadingTickets, setLoadingTickets] = useState(true)
+  const [fetchError, setFetchError] = useState("")
 
   const update = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
-  const loadTickets = async () => {
-    if (!email) { setLoadingTickets(false); return }
+  const loadTickets = async (currentEmail) => {
+    setLoadingTickets(true)
+    setFetchError("")
+    console.log("[TicketPage] loadTickets — user.email:", currentEmail)
+    if (!currentEmail) {
+      console.warn("[TicketPage] No user email available; skipping ticket query.")
+      setTickets([])
+      setLoadingTickets(false)
+      return
+    }
     const { data, error: e } = await supabase
       .from("tickets")
       .select("*")
-      .eq("submitted_by_email", email)
+      .eq("submitted_by_email", currentEmail)
       .order("created_at", { ascending: false })
-    if (!e) setTickets(data || [])
+    if (e) {
+      console.error("[TicketPage] tickets query failed:", e)
+      setFetchError(e.message || "Failed to load tickets.")
+      setTickets([])
+    } else {
+      console.log(`[TicketPage] Loaded ${data?.length || 0} ticket(s) for ${currentEmail}`)
+      setTickets(data || [])
+    }
     setLoadingTickets(false)
   }
 
   useEffect(() => {
-    loadTickets()
+    console.log("[TicketPage] mount — session.user.email:", email)
+    loadTickets(email)
     if (!email) return
 
+    // Realtime filter uses the same column the initial query filters on (submitted_by_email)
     const channel = supabase
       .channel(`tickets-for-${email}`)
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "tickets", filter: `submitted_by_email=eq.${email}` },
         (payload) => {
+          console.log("[TicketPage] realtime payload:", payload)
           setTickets(prev => {
             if (payload.eventType === "INSERT") {
               if (prev.some(t => t.id === payload.new.id)) return prev
@@ -77,7 +96,7 @@ export default function TicketPage() {
           })
         }
       )
-      .subscribe()
+      .subscribe((status) => console.log("[TicketPage] realtime status:", status))
 
     return () => { supabase.removeChannel(channel) }
   }, [email])
@@ -101,7 +120,7 @@ export default function TicketPage() {
       if (!resp.ok) throw new Error(data.error || `Request failed (${resp.status})`)
       setSuccess({ ...form, ticket_id: data.ticket_id, timestamp: data.timestamp || new Date().toISOString() })
       setForm(initialForm(user))
-      loadTickets()
+      loadTickets(email)
     } catch (err) {
       setError(err.message || "Something went wrong submitting your ticket.")
     } finally {
@@ -241,28 +260,72 @@ export default function TicketPage() {
           <h2 className="text-base font-semibold text-slate-800" style={{fontFamily:"Georgia,serif"}}>
             My Tickets
           </h2>
-          <span className="text-xs text-slate-500">
-            {tickets.length} {tickets.length === 1 ? "ticket" : "tickets"}
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-500">
+              {loadingTickets ? "Loading…" : `${tickets.length} ${tickets.length === 1 ? "ticket" : "tickets"}`}
+            </span>
+            <Button size="sm" variant="secondary" onClick={() => loadTickets(email)} disabled={loadingTickets}>
+              Refresh
+            </Button>
+          </div>
         </div>
 
+        {!email && !loadingTickets && (
+          <Card className="mb-3 border-amber-200 bg-amber-50">
+            <div className="p-4 flex gap-3">
+              <AlertTriangle size={18} className="text-amber-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-semibold text-amber-800">No email available on session</p>
+                <p className="text-xs text-amber-700 mt-0.5">
+                  Can't load tickets — the auth context didn't expose <code>session.user.email</code>.
+                  Check the browser console for details.
+                </p>
+              </div>
+            </div>
+          </Card>
+        )}
+
+        {fetchError && (
+          <Card className="mb-3 border-red-200 bg-red-50">
+            <div className="p-4 flex gap-3">
+              <AlertTriangle size={18} className="text-red-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-semibold text-red-800">Couldn't load your tickets</p>
+                <p className="text-xs text-red-700 mt-0.5">{fetchError}</p>
+                <p className="text-xs text-red-600 mt-1">
+                  This usually means a Supabase RLS policy is blocking the read. See the browser console for the raw error.
+                </p>
+              </div>
+            </div>
+          </Card>
+        )}
+
         {loadingTickets ? (
-          <Spinner />
-        ) : tickets.length === 0 ? (
+          <Card>
+            <div className="p-6">
+              <Spinner />
+              <p className="text-xs text-slate-500 text-center mt-2">
+                Loading tickets for {email || "(no email)"}…
+              </p>
+            </div>
+          </Card>
+        ) : tickets.length === 0 && !fetchError ? (
           <Card>
             <div className="p-8 flex flex-col items-center text-center">
               <div className="bg-brand-50 rounded-full p-4 mb-3">
                 <Inbox size={22} className="text-brand-400" />
               </div>
               <p className="text-sm font-medium text-slate-700">No tickets yet</p>
-              <p className="text-xs text-slate-500 mt-1">Anything you submit will show up here.</p>
+              <p className="text-xs text-slate-500 mt-1">
+                {email ? `Anything you submit from ${email} will show up here.` : "Anything you submit will show up here."}
+              </p>
             </div>
           </Card>
-        ) : (
+        ) : tickets.length > 0 ? (
           <div className="space-y-3">
             {tickets.map(t => <TicketCard key={t.id} ticket={t} />)}
           </div>
-        )}
+        ) : null}
       </section>
     </div>
   )
