@@ -337,7 +337,13 @@ export default function ClientProfile() {
             <div className="px-4 py-2">
               <InfoRow label="Date of birth"   value={client.date_of_birth ? format(new Date(client.date_of_birth),"MMM d, yyyy") : null} />
               <InfoRow label="Nationality"     value={client.nationality} />
-              <InfoRow label="Address"         value={fullAddress || null} copyValue={fullAddress || null} />
+              <div className="flex items-start gap-2 py-2 border-b border-slate-50">
+                <span className="text-xs text-slate-400 w-36 flex-shrink-0 pt-0.5 uppercase tracking-wide">Address</span>
+                <span className={`text-sm flex-1 ${fullAddress ? "text-slate-700" : "text-slate-400 italic"}`}>
+                  {fullAddress || "Not set"}
+                </span>
+                {fullAddress && <CopyButton value={fullAddress} />}
+              </div>
               <InfoRow label="Passport no."    value={client.passport_number} copyValue={client.passport_number} />
               <InfoRow label="Passport expiry" value={client.passport_expiry ? format(new Date(client.passport_expiry),"MMM d, yyyy") : null} />
               <InfoRow label="Emergency"       value={client.emergency_contact_name} />
