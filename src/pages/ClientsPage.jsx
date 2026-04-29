@@ -7,6 +7,7 @@ import { Card, PageHeader, Button, Input, Select, Textarea, Modal, EmptyState, S
 
 const EMPTY = {
   first_name:"", last_name:"", email:"", phone:"", date_of_birth:"",
+  address_street:"", address_city:"", address_state:"", address_zip:"",
   passport_number:"", passport_expiry:"", nationality:"", preferences:"",
   emergency_contact_name:"", emergency_contact_phone:"", notes:"",
   preferred_airline:"", preferred_cruise_line:"", preferred_seat:"",
@@ -461,6 +462,12 @@ export default function ClientsPage() {
               <Select label="Typical budget" {...field("typical_budget")}>
                 {BUDGETS.map(b => <option key={b}>{b}</option>)}
               </Select>
+            </div>
+            <Input label="Street address" {...field("address_street")} placeholder="123 Main St" />
+            <div className="grid grid-cols-3 gap-3">
+              <Input label="City"  {...field("address_city")}  placeholder="Macon" />
+              <Input label="State" {...field("address_state")} placeholder="GA" />
+              <Input label="Zip"   {...field("address_zip")}   placeholder="31201" />
             </div>
             <Input label="Referral source" {...field("referral_source")} placeholder="How did they find ASA?" />
             <div className="flex items-center gap-3 p-3 bg-amber-50 rounded-lg border border-amber-100">

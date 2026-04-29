@@ -3,7 +3,7 @@ import { useParams, useNavigate, Link } from "react-router-dom"
 import { supabase } from "../lib/supabase"
 import { format } from "date-fns"
 import { ArrowLeft, Mail, Phone, Plus, Trash2, AlertTriangle, UserPlus, Sparkles, Phone as PhoneIcon, Printer, Globe, X, ExternalLink } from "lucide-react"
-import { Button, StatusBadge, OccasionBadge, Spinner, Modal, Input, Select, Textarea, Badge, InfoRow, SectionCard, MissingDataWarning } from "../components/UI"
+import { Button, StatusBadge, OccasionBadge, Spinner, Modal, Input, Select, Textarea, Badge, InfoRow, SectionCard, MissingDataWarning, CopyButton } from "../components/UI"
 import AIEmailComposer from "../components/AIEmailComposer"
 import AIClientBriefing from "../components/AIClientBriefing"
 import { generateClientCard } from "../lib/clientCard"
@@ -274,6 +274,8 @@ export default function ClientProfile() {
   if (!client) return <div className="p-6 text-slate-500">Client not found.</div>
 
   const missing       = getMissingFields(client)
+  const cityStateZip  = [client.address_city, client.address_state].filter(Boolean).join(", ") + (client.address_zip ? ` ${client.address_zip}` : "")
+  const fullAddress   = [client.address_street, cityStateZip.trim()].filter(Boolean).join(", ")
   const upcomingTrips = trips.filter(t => t.departure_date && new Date(t.departure_date) >= new Date() && t.status !== "Cancelled")
   const pastTrips     = trips.filter(t => !upcomingTrips.includes(t))
   // Trips this client is NOT already on — for add-to-trip
@@ -302,8 +304,18 @@ export default function ClientProfile() {
             {client.referral_source === "Vacation Package" && <span className="text-xs bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full font-medium">Vacation Package</span>}
           </div>
           <div className="flex items-center gap-4 mt-0.5 flex-wrap">
-            {client.email && <a href={`mailto:${client.email}`} className="flex items-center gap-1.5 text-sm text-brand-600 hover:text-brand-800 font-medium transition-colors"><Mail size={13}/>{client.email}</a>}
-            {client.phone && <a href={`tel:${client.phone}`}   className="flex items-center gap-1.5 text-sm text-brand-600 hover:text-brand-800 font-medium transition-colors"><Phone size={13}/>{client.phone}</a>}
+            {client.email && (
+              <span className="inline-flex items-center gap-0.5">
+                <a href={`mailto:${client.email}`} className="flex items-center gap-1.5 text-sm text-brand-600 hover:text-brand-800 font-medium transition-colors"><Mail size={13}/>{client.email}</a>
+                <CopyButton value={client.email} />
+              </span>
+            )}
+            {client.phone && (
+              <span className="inline-flex items-center gap-0.5">
+                <a href={`tel:${client.phone}`} className="flex items-center gap-1.5 text-sm text-brand-600 hover:text-brand-800 font-medium transition-colors"><Phone size={13}/>{client.phone}</a>
+                <CopyButton value={client.phone} />
+              </span>
+            )}
             {client.home_airport && <span className="text-xs text-brand-500 font-medium bg-brand-50 px-2 py-0.5 rounded-full">{client.home_airport}</span>}
           </div>
         </div>
@@ -325,10 +337,11 @@ export default function ClientProfile() {
             <div className="px-4 py-2">
               <InfoRow label="Date of birth"   value={client.date_of_birth ? format(new Date(client.date_of_birth),"MMM d, yyyy") : null} />
               <InfoRow label="Nationality"     value={client.nationality} />
-              <InfoRow label="Passport no."    value={client.passport_number} />
+              <InfoRow label="Address"         value={fullAddress || null} copyValue={fullAddress || null} />
+              <InfoRow label="Passport no."    value={client.passport_number} copyValue={client.passport_number} />
               <InfoRow label="Passport expiry" value={client.passport_expiry ? format(new Date(client.passport_expiry),"MMM d, yyyy") : null} />
               <InfoRow label="Emergency"       value={client.emergency_contact_name} />
-              <InfoRow label="Emerg. phone"    value={client.emergency_contact_phone} />
+              <InfoRow label="Emerg. phone"    value={client.emergency_contact_phone} copyValue={client.emergency_contact_phone} />
               <InfoRow label="Referral"        value={client.referral_source} />
               {client.is_minor && (
                 <div className="flex items-center gap-2 py-2">

@@ -1,3 +1,6 @@
+import { useState } from "react"
+import { Copy, Check } from "lucide-react"
+
 // ─── Badge ───────────────────────────────────────────────────────────────────
 export function Badge({ label, color = "gray" }) {
   const map = {
@@ -208,13 +211,35 @@ export function Spinner() {
 }
 
 // ─── InfoRow ─────────────────────────────────────────────────────────────────
-export function InfoRow({ label, value }) {
+export function InfoRow({ label, value, copyValue }) {
   if (!value) return null
   return (
     <div className="flex items-start gap-2 py-2 border-b border-slate-50 last:border-0">
       <span className="text-xs text-slate-400 w-36 flex-shrink-0 pt-0.5 uppercase tracking-wide">{label}</span>
-      <span className="text-sm text-slate-700">{value}</span>
+      <span className="text-sm text-slate-700 flex-1">{value}</span>
+      {copyValue && <CopyButton value={copyValue} />}
     </div>
+  )
+}
+
+// ─── CopyButton ──────────────────────────────────────────────────────────────
+export function CopyButton({ value, className = "" }) {
+  const [copied, setCopied] = useState(false)
+  if (!value) return null
+  const handleCopy = async (e) => {
+    e?.preventDefault?.()
+    e?.stopPropagation?.()
+    try {
+      await navigator.clipboard.writeText(String(value))
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {}
+  }
+  return (
+    <button onClick={handleCopy} title={copied ? "Copied!" : "Copy"}
+      className={`flex-shrink-0 p-1 rounded-md text-slate-400 hover:text-brand-600 hover:bg-brand-50 transition-colors ${className}`}>
+      {copied ? <Check size={12} className="text-green-600" /> : <Copy size={12} />}
+    </button>
   )
 }
 
