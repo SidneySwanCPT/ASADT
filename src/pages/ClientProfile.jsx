@@ -2,7 +2,7 @@ import { useEffect, useState } from "react"
 import { useParams, useNavigate, Link } from "react-router-dom"
 import { supabase } from "../lib/supabase"
 import { format } from "date-fns"
-import { ArrowLeft, Mail, Phone, Plus, Trash2, AlertTriangle, UserPlus, Sparkles, Phone as PhoneIcon, Printer, Globe, X, ExternalLink } from "lucide-react"
+import { ArrowLeft, Mail, Phone, Plus, Trash2, AlertTriangle, UserPlus, Sparkles, Phone as PhoneIcon, Printer, Globe, X, ExternalLink, Pencil } from "lucide-react"
 import { Button, StatusBadge, OccasionBadge, Spinner, Modal, Input, Select, Textarea, Badge, InfoRow, SectionCard, MissingDataWarning, CopyButton } from "../components/UI"
 import AIEmailComposer from "../components/AIEmailComposer"
 import AIClientBriefing from "../components/AIClientBriefing"
@@ -14,6 +14,25 @@ const STATUSES      = ["Quoted","Confirmed","Paid","Departed","Completed","Cance
 const OCCASIONS     = ["","Birthday","Anniversary","Honeymoon","Girls Trip","Business","Family","Group","Other"]
 const PAY_STATUSES  = ["Pending","Deposit Paid","Paid in Full","Overdue","Cancelled"]
 const EMPTY_TRIP    = { destination:"", departure_date:"", return_date:"", status:"Quoted", total_price:"", amount_paid:"0", booking_ref:"", confirmation_number:"", traveler_count:"1", occasion:"", credit_balance:"0", credit_notes:"", group_name:"", notes:"" }
+
+const SEATS      = ["","Window","Aisle","Middle","No preference"]
+const CABINS     = ["","Economy","Premium Economy","Business","First"]
+const HOTELS     = ["","Budget","Mid-range","Luxury","Boutique","No preference"]
+const TRANSPORTS = ["","Uber/Lyft","Taxi","Rental Car","Public Transit","No preference"]
+const CARS       = ["","Economy","Compact","Midsize","SUV","Luxury","No preference"]
+const BUDGETS    = ["","Under $1,000","$1,000 – $3,000","$3,000 – $5,000","$5,000 – $10,000","$10,000+"]
+
+const EMPTY_CLIENT = {
+  first_name:"", last_name:"", email:"", phone:"", date_of_birth:"",
+  address_street:"", address_city:"", address_state:"", address_zip:"",
+  passport_number:"", passport_expiry:"", nationality:"", preferences:"",
+  emergency_contact_name:"", emergency_contact_phone:"", notes:"",
+  preferred_airline:"", preferred_cruise_line:"", preferred_seat:"",
+  preferred_cabin:"", preferred_hotel_tier:"", preferred_transport:"",
+  preferred_rental_car:"", home_airport:"", typical_budget:"",
+  dietary_restrictions:"", special_needs:"", referral_source:"",
+  is_minor: false,
+}
 
 function getMissingFields(c) {
   const m = []
@@ -48,6 +67,9 @@ export default function ClientProfile() {
   const [bookTripModal, setBookTripModal]   = useState(false)
   const [addToTripModal, setAddToTripModal] = useState(false)
   const [selectedTrip, setSelectedTrip]     = useState(null)
+  const [editClientModal, setEditClientModal] = useState(false)
+  const [editForm, setEditForm]               = useState(EMPTY_CLIENT)
+  const [editTab, setEditTab]                 = useState("basic")
 
   // Traveler quick-view popup
   const [travelerPopup, setTravelerPopup]   = useState(null) // the traveler object
@@ -265,6 +287,33 @@ export default function ClientProfile() {
     setTasks(t => t.filter(x => x.id !== taskId))
   }
 
+  const openEditClient = () => {
+    setEditForm({ ...EMPTY_CLIENT, ...client })
+    setEditTab("basic")
+    setEditClientModal(true)
+  }
+
+  const saveClient = async () => {
+    setSaving(true)
+    const payload = Object.fromEntries(
+      Object.entries(editForm).map(([k, v]) => [k, v === "" ? null : v])
+    )
+    payload.first_name = editForm.first_name
+    payload.last_name  = editForm.last_name
+    payload.is_minor   = editForm.is_minor || false
+    const { error } = await supabase.from("clients").update(payload).eq("id", id)
+    if (error) {
+      alert("Error saving client: " + error.message)
+      setSaving(false)
+      return
+    }
+    setSaving(false)
+    setEditClientModal(false)
+    load()
+  }
+
+  const ef = (k) => ({ value: editForm[k] === undefined || editForm[k] === null ? "" : editForm[k], onChange: e => setEditForm(f => ({ ...f, [k]: e.target.value })) })
+
   const tf = (k) => ({ value: travelerForm[k]||"", onChange: e => setTravelerForm(f => ({ ...f, [k]: e.target.value })) })
   const lf = (k) => ({ value: loyaltyForm[k] ||"", onChange: e => setLoyaltyForm(f =>  ({ ...f, [k]: e.target.value })) })
   const bf = (k) => ({ value: tripForm[k]    ??"", onChange: e => setTripForm(f =>     ({ ...f, [k]: e.target.value })) })
@@ -320,6 +369,7 @@ export default function ClientProfile() {
           </div>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
+          <Button variant="secondary" size="sm" onClick={openEditClient}><Pencil size={12}/>Edit</Button>
           <Button variant="primary"   size="sm" onClick={() => setBookTripModal(true)}><Globe size={12}/>Book trip</Button>
           <Button variant="secondary" size="sm" onClick={() => setAddToTripModal(true)}><Plus size={12}/>Add to trip</Button>
           <Button variant="secondary" size="sm" onClick={() => setBriefingOpen(true)}><PhoneIcon size={12}/>Prep for call</Button>
@@ -335,8 +385,8 @@ export default function ClientProfile() {
         <div className="space-y-4">
           <SectionCard title="Profile">
             <div className="px-4 py-2">
-              <InfoRow label="Date of birth"   value={client.date_of_birth ? format(new Date(client.date_of_birth),"MMM d, yyyy") : null} />
-              <InfoRow label="Nationality"     value={client.nationality} />
+              <InfoRow label="Date of birth"   value={client.date_of_birth ? format(new Date(client.date_of_birth),"MMM d, yyyy") : null} copyValue={client.date_of_birth ? format(new Date(client.date_of_birth),"MMM d, yyyy") : null} />
+              <InfoRow label="Nationality"     value={client.nationality} copyValue={client.nationality} />
               <div className="flex items-start gap-2 py-2 border-b border-slate-50">
                 <span className="text-xs text-slate-400 w-36 flex-shrink-0 pt-0.5 uppercase tracking-wide">Address</span>
                 <span className={`text-sm flex-1 ${fullAddress ? "text-slate-700" : "text-slate-400 italic"}`}>
@@ -345,10 +395,10 @@ export default function ClientProfile() {
                 {fullAddress && <CopyButton value={fullAddress} />}
               </div>
               <InfoRow label="Passport no."    value={client.passport_number} copyValue={client.passport_number} />
-              <InfoRow label="Passport expiry" value={client.passport_expiry ? format(new Date(client.passport_expiry),"MMM d, yyyy") : null} />
-              <InfoRow label="Emergency"       value={client.emergency_contact_name} />
+              <InfoRow label="Passport expiry" value={client.passport_expiry ? format(new Date(client.passport_expiry),"MMM d, yyyy") : null} copyValue={client.passport_expiry ? format(new Date(client.passport_expiry),"MMM d, yyyy") : null} />
+              <InfoRow label="Emergency"       value={client.emergency_contact_name} copyValue={client.emergency_contact_name} />
               <InfoRow label="Emerg. phone"    value={client.emergency_contact_phone} copyValue={client.emergency_contact_phone} />
-              <InfoRow label="Referral"        value={client.referral_source} />
+              <InfoRow label="Referral"        value={client.referral_source} copyValue={client.referral_source} />
               {client.is_minor && (
                 <div className="flex items-center gap-2 py-2">
                   <span className="text-xs text-slate-400 w-36 flex-shrink-0 uppercase tracking-wide">Status</span>
@@ -360,16 +410,16 @@ export default function ClientProfile() {
 
           <SectionCard title="Travel preferences">
             <div className="px-4 py-2">
-              <InfoRow label="Airline"       value={client.preferred_airline} />
-              <InfoRow label="Cruise line"   value={client.preferred_cruise_line} />
-              <InfoRow label="Seat"          value={client.preferred_seat} />
-              <InfoRow label="Cabin"         value={client.preferred_cabin} />
-              <InfoRow label="Hotel"         value={client.preferred_hotel_tier} />
-              <InfoRow label="Transport"     value={client.preferred_transport} />
-              <InfoRow label="Home airport"  value={client.home_airport} />
-              <InfoRow label="Budget"        value={client.typical_budget} />
-              <InfoRow label="Dietary"       value={client.dietary_restrictions} />
-              <InfoRow label="Special needs" value={client.special_needs} />
+              <InfoRow label="Airline"       value={client.preferred_airline}     copyValue={client.preferred_airline} />
+              <InfoRow label="Cruise line"   value={client.preferred_cruise_line} copyValue={client.preferred_cruise_line} />
+              <InfoRow label="Seat"          value={client.preferred_seat}        copyValue={client.preferred_seat} />
+              <InfoRow label="Cabin"         value={client.preferred_cabin}       copyValue={client.preferred_cabin} />
+              <InfoRow label="Hotel"         value={client.preferred_hotel_tier}  copyValue={client.preferred_hotel_tier} />
+              <InfoRow label="Transport"     value={client.preferred_transport}   copyValue={client.preferred_transport} />
+              <InfoRow label="Home airport"  value={client.home_airport}          copyValue={client.home_airport} />
+              <InfoRow label="Budget"        value={client.typical_budget}        copyValue={client.typical_budget} />
+              <InfoRow label="Dietary"       value={client.dietary_restrictions}  copyValue={client.dietary_restrictions} />
+              <InfoRow label="Special needs" value={client.special_needs}         copyValue={client.special_needs} />
               {client.preferences && (
                 <div className="py-2">
                   <p className="text-xs text-slate-400 uppercase tracking-wide mb-1">Notes</p>
@@ -911,6 +961,98 @@ export default function ClientProfile() {
             {travelerForm._mode === "new_client" && (
               <p className="text-xs text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">A full client record will also be created.</p>
             )}
+          </>
+        )}
+      </Modal>
+
+      {/* Edit Client Modal */}
+      <Modal open={editClientModal} onClose={() => setEditClientModal(false)}
+        title={`Edit — ${client.first_name} ${client.last_name}`} wide
+        footer={<>
+          <Button variant="secondary" onClick={() => setEditClientModal(false)}>Cancel</Button>
+          <Button onClick={saveClient} disabled={saving || !editForm.first_name || !editForm.last_name}>
+            {saving ? "Saving..." : "Save client"}
+          </Button>
+        </>}>
+        <div className="flex rounded-lg border border-slate-200 overflow-hidden text-sm -mt-1">
+          {[["basic","Basic info"],["travel","Travel preferences"],["passport","Passport & emergency"]].map(([key, label]) => (
+            <button key={key} onClick={() => setEditTab(key)}
+              className={`flex-1 py-2 transition-colors text-xs font-medium ${editTab===key?"text-white":"text-slate-500 hover:bg-brand-50"}`}
+              style={editTab===key?{background:"#8B1A4A"}:{}}>
+              {label}
+            </button>
+          ))}
+        </div>
+        {editTab === "basic" && (
+          <>
+            <div className="grid grid-cols-2 gap-3">
+              <Input label="First name" {...ef("first_name")} placeholder="Jane" />
+              <Input label="Last name"  {...ef("last_name")}  placeholder="Smith" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Input label="Email"  type="email" {...ef("email")} placeholder="jane@email.com" />
+              <Input label="Phone"  {...ef("phone")} placeholder="+1 555 000 0000" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Input label="Date of birth" type="date" {...ef("date_of_birth")} />
+              <Input label="Nationality"   {...ef("nationality")} placeholder="American" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Input label="Home airport" {...ef("home_airport")} placeholder="ATL, MCN, SAV..." />
+              <Select label="Typical budget" {...ef("typical_budget")}>
+                {BUDGETS.map(b => <option key={b}>{b}</option>)}
+              </Select>
+            </div>
+            <Input label="Street address" {...ef("address_street")} placeholder="123 Main St" />
+            <div className="grid grid-cols-3 gap-3">
+              <Input label="City"  {...ef("address_city")}  placeholder="Macon" />
+              <Input label="State" {...ef("address_state")} placeholder="GA" />
+              <Input label="Zip"   {...ef("address_zip")}   placeholder="31201" />
+            </div>
+            <Input label="Referral source" {...ef("referral_source")} placeholder="How did they find ASA?" />
+            <div className="flex items-center gap-3 p-3 bg-amber-50 rounded-lg border border-amber-100">
+              <input type="checkbox" id="ef_is_minor" checked={editForm.is_minor||false}
+                onChange={e => setEditForm(f => ({ ...f, is_minor: e.target.checked }))}
+                className="w-4 h-4 accent-amber-500" />
+              <label htmlFor="ef_is_minor" className="text-sm text-amber-700 font-medium cursor-pointer">
+                This client is a minor (under 18)
+              </label>
+            </div>
+            <Textarea label="Notes" {...ef("notes")} />
+          </>
+        )}
+        {editTab === "travel" && (
+          <>
+            <div className="grid grid-cols-2 gap-3">
+              <Input label="Preferred airline"     {...ef("preferred_airline")}     placeholder="Delta, Southwest..." />
+              <Input label="Preferred cruise line" {...ef("preferred_cruise_line")} placeholder="Carnival, Royal Caribbean..." />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Select label="Preferred seat"  {...ef("preferred_seat")}>{SEATS.map(s=><option key={s}>{s}</option>)}</Select>
+              <Select label="Cabin class"     {...ef("preferred_cabin")}>{CABINS.map(c=><option key={c}>{c}</option>)}</Select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Select label="Hotel preference"  {...ef("preferred_hotel_tier")}>{HOTELS.map(h=><option key={h}>{h}</option>)}</Select>
+              <Select label="Ground transport"  {...ef("preferred_transport")}>{TRANSPORTS.map(t=><option key={t}>{t}</option>)}</Select>
+            </div>
+            <Select label="Rental car preference" {...ef("preferred_rental_car")}>{CARS.map(c=><option key={c}>{c}</option>)}</Select>
+            <div className="grid grid-cols-2 gap-3">
+              <Input label="Dietary restrictions" {...ef("dietary_restrictions")} placeholder="Vegetarian, Gluten-free..." />
+              <Input label="Special needs"        {...ef("special_needs")}        placeholder="Wheelchair, mobility..." />
+            </div>
+            <Textarea label="General travel preferences" {...ef("preferences")} placeholder="Window seat, prefers boutique hotels..." />
+          </>
+        )}
+        {editTab === "passport" && (
+          <>
+            <div className="grid grid-cols-2 gap-3">
+              <Input label="Passport number"  {...ef("passport_number")}  placeholder="A12345678" />
+              <Input label="Passport expiry"  type="date" {...ef("passport_expiry")} />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Input label="Emergency contact name"  {...ef("emergency_contact_name")}  placeholder="John Smith" />
+              <Input label="Emergency contact phone" {...ef("emergency_contact_phone")} placeholder="+1 555 000 0001" />
+            </div>
           </>
         )}
       </Modal>
